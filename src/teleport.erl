@@ -14,6 +14,7 @@
   start_server/2,
   stop_server/1,
   connect/1,
+  connect/2,
   disconnect/1,
   incoming_conns/0,
   outgoing_conns/0,
