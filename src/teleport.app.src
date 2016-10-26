@@ -1,0 +1,30 @@
+%% Copyright (c) 2016 Contributors as noted in the AUTHORS file
+%%
+%% This file is part teleport
+%%
+%% This Source Code Form is subject to the terms of the Mozilla Public
+%% License, v. 2.0. If a copy of the MPL was not distributed with this
+%% file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+{application, teleport,
+  [{description, "application to call remote functions"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, { teleport_app, []}},
+    {applications,
+      [kernel,
+        stdlib,
+        lager,
+        crypto,
+        public_key,
+        ssl,
+        ranch
+      ]},
+    {env,[]},
+    {modules, []},
+  
+    {maintainers, ["Benoit Chesneau"]},
+    {licenses, ["MPL2"]},
+    {links, [{"Gitlab", "https://gitlab.com/barrel-db/teleport"}]}
+
+  ]}.
