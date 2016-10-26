@@ -62,8 +62,8 @@ get_conn_pid(Name, rand) ->
     [#teleport_lb{conns = [Conn]}] ->
       {ok, Conn};
     [#teleport_lb{num_conns = N, conns = Conns}] when N > 0 ->
-      N = generate_rand_int(N),
-      {ok, lists:nth(N, Conns)};
+      N2 = generate_rand_int(N),
+      {ok, lists:nth(N2, Conns)};
     _ ->
       {badrpc, not_connected}
   end;
