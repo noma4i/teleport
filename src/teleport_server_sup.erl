@@ -32,7 +32,10 @@ start_link() ->
 %%====================================================================
 
 start_server(Name, Config) when is_map(Config) ->
-  supervisor:start_child(?MODULE, server_spec(server_name(Name), Config));
+  case supervisor:start_child(?MODULE, server_spec(server_name(Name), Config)) of
+    {ok, Pid} -> {ok, Pid};
+    {error, {already_started, Pid}} -> {ok, Pid}
+  end;
 start_server(Name, Config) when is_list(Config) ->
   start_server(Name, maps:from_list(Config));
 start_server(_, _) -> erlang:error(badarg).

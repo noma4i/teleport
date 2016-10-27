@@ -8,7 +8,7 @@
 
 {application, teleport,
   [{description, "application to call remote functions"},
-    {vsn, "0.1.3"},
+    {vsn, "0.1.4"},
     {registered, []},
     {mod, { teleport_app, []}},
     {applications,
