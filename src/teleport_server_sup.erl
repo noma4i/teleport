@@ -41,7 +41,14 @@ start_server(Name, Config) when is_list(Config) ->
 start_server(_, _) -> erlang:error(badarg).
 
 stop_server(Name) ->
-  supervisor:terminate_child(?MODULE, server_name(Name)).
+  ServerRef = {ranch_listener_sup, server_name(Name)},
+  case supervisor:terminate_child(?MODULE, ServerRef) of
+    ok ->
+      _ = supervisor:delete_child(?MODULE, ServerRef),
+      ranch_server:cleanup_listener_opts(ServerRef);
+    Error ->
+      Error
+  end.
 
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
