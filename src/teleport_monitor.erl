@@ -124,6 +124,15 @@ handle_call({monitor_node, Pid, Name}, _From, State) ->
 handle_call({monitor_conn, Pid, Name}, _From, State) ->
   ets:insert(?TAB, {{conn, Name, Pid}, Pid}),
   {reply, ok, State};
+
+handle_call({demonitor_node, Pid, Name}, _From, State) ->
+  ets:delete(?TAB, {node, Name, Pid}),
+  {reply, ok, State};
+handle_call({demonitor_conn, Pid, Name}, _From, State) ->
+  ets:delete(?TAB, {conn, Name, Pid}),
+  {reply, ok, State};
+
+
 handle_call(_Msg, _From, State) ->
   {reply, bad_call, State}.
 
