@@ -36,7 +36,7 @@ connect(Name, Config) ->
   %% start the load balancer
   case supervisor:start_child(?MODULE, lb_spec(Name)) of
     {error, already_present} -> ok;
-    {error, {alread_started, _Pid}} -> ok;
+    {error, {already_started, _Pid}} -> ok;
     {ok, _Pid} ->
       lists:foreach(
         fun(Spec) ->
