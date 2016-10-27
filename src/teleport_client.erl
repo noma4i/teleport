@@ -156,7 +156,7 @@ init(Parent, Name, Config) ->
   Host = maps:get(host, Config, "localhost"),
   Port = maps:get(port, Config, ?DEFAULT_PORT),
 
-  Retry = maps:get(retry, Config, 5),
+  Retry = maps:get(retry, Config, 3),
   Transport = maps:get(transport, Config, ranch_tcp),
   State = #{
     parent => Parent,
@@ -168,9 +168,9 @@ init(Parent, Name, Config) ->
     conf => Config,
     peer_node => undefined
   },
-  connect(State, Retry).
+  connect(State, {Retry, 200, teleport_conns_sup:connecttime()}).
 
-connect(State, Retries) ->
+connect(State, {Retries, Delay, Max}) ->
   #{host := Host,
     port := Port,
     transport := Transport,
@@ -188,32 +188,32 @@ connect(State, Retries) ->
     {ok, Sock} ->
       {ok, HeartBeat} = timer:send_interval(5000, self(), heartbeat),
       true = ets:insert(teleport_outgoing_conns, {self(), Host, undefined}),
-
       Transport:setopts(Sock, [{packet, 4}, {active, once}]),
       do_handshake(State#{sock => Sock,
                           heartbeat => HeartBeat,
                           missed_heartbeats => 0});
     {error, _} ->
-      retry(State, Retries - 1)
+      retry(State, {Retries - 1, rand_increment(Delay, Max), Max})
   end.
 
 %% Exit normally if the retry functionality has been disabled.
 %% TODO: add exponential backlog
-retry(_, 0) ->
+retry(_, {0, _, _}) ->
   ok;
 retry(State, Retries) ->
   retry_loop(State, Retries).
 
 %% Too many retries, give up.
-retry_loop(_, 0) ->
+retry_loop(_, {0, _, _}) ->
   error(gone);
-retry_loop(State=#{parent := Parent, conf  := Conf}, Retries) ->
-  _ = erlang:send_after(maps:get(retry_timeout, Conf, 5000), self(), retry),
+retry_loop(State=#{parent := Parent}, {Retries, Delay, Max}) ->
+  _ = erlang:send_after(Delay, self(), retry),
   receive
-    retry -> connect(State, Retries);
+    retry ->
+      connect(State, {Retries, Delay, Max});
     {system, From, Request} ->
       sys:handle_system_msg(Request, From, Parent, ?MODULE, [],
-        {retry_loop, State, Retries})
+        {retry_loop, State, {Retries, Delay, Max}})
   end.
 
 do_handshake(State = #{ name := Name }) ->
@@ -224,10 +224,11 @@ do_handshake(State = #{ name := Name }) ->
       wait_handshake(State);
     Error ->
       #{ host := Host, port:= Port} = State,
-      lager:error(
+      lager:info(
         "teleport: error while sending handshake to ~p:~p (~p): ~w",
         [Host, Port, Name, Error]
       ),
+      cleanup(State),
       exit(normal)
   end.
 
@@ -254,7 +255,7 @@ wait_handshake(State) ->
         heartbeat ->
           loop(State#{missed_heartbeats => 0});
         OtherMsg ->
-          lager:debug("teleport: got unknown message ~p~n", [OtherMsg]),
+          lager:info("teleport: got unknown message ~p~n", [OtherMsg]),
           wait_handshake(State)
       catch
         error:badarg ->
@@ -272,6 +273,9 @@ wait_handshake(State) ->
     {Error, Sock, Reason} ->
       handle_conn_closed(State, {error, {Error, Reason}}),
       exit(normal);
+    {'EXIT', Parent, Reason} ->
+      handle_conn_closed(State, {error, Reason}),
+      exit(Reason);
     {system, From, Request} ->
       sys:handle_system_msg(Request, From, Parent, ?MODULE, [],
         {wait_handshake, State})
@@ -295,6 +299,9 @@ loop(State = #{parent := Parent, transport := Transport, sock := Sock}) ->
         {loop, State});
     heartbeat ->
       handle_heartbeat(State, fun loop/1);
+    {'EXIT', Parent, Reason} ->
+      handle_conn_closed(State, {error, Reason}),
+      exit(Reason);
     Any ->
       lager:info("teleport:client got unknown message: ~p", [Any]),
       loop(State)
@@ -364,6 +371,7 @@ system_terminate(_Reason, _, _, {_, State, _}) ->
   _ = cleanup(State),
   ok;
 system_terminate(_Reason, _, _, {_, State}) ->
+  lager:info("terminate with reason ~p~n", [_Reason]),
   _ = cleanup(State),
   ok.
 
@@ -398,3 +406,21 @@ cleanup(State) ->
     sock => undefined,
     missed_heartbeats => 0
   }.
+
+rand_increment(N) ->
+  %% New delay chosen from [N, 3N], i.e. [0.5 * 2N, 1.5 * 2N]
+  Width = N bsl 1,
+  N + rand:uniform(Width + 1) - 1.
+
+rand_increment(N, Max) ->
+  %% The largest interval for [0.5 * Time, 1.5 * Time] with maximum Max is
+  %% [Max div 3, Max].
+  MaxMinDelay = Max div 3,
+  if
+    MaxMinDelay =:= 0 ->
+      rand:uniform(Max);
+    N > MaxMinDelay ->
+      rand_increment(MaxMinDelay);
+    true ->
+      rand_increment(N)
+  end.

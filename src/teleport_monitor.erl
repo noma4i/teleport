@@ -105,9 +105,11 @@ init([IsNew]) ->
 
 
 handle_call({connup, Name}=Msg, _From, State) ->
+  lager:info("teleport: CONNUP: ~p~n", [Name]),
   broadcast(conn, Name, Msg),
   {reply, ok, State};
 handle_call({conndown, Name}=Msg, _From, State) ->
+  lager:info("teleport: CONNDOWN: ~p~n", [Name]),
   broadcast(conn, Name, Msg),
   {reply, ok, State};
 

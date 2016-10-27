@@ -15,8 +15,16 @@
   disconnect/1
 ]).
 
+%% internal
+-export([
+  passive_monitor/2,
+  connecttime/0
+]).
+
 %% Supervisor callbacks
 -export([init/1]).
+
+-define(SETUPTIME, 7000).
 
 
 %%====================================================================
@@ -31,26 +39,16 @@ start_link() ->
 %%====================================================================
 
 connect(Name, Config) ->
-  Spec =conn_spec(Name, Config),
-  Self = self(),
-  Monitor = spawn_link(
-    fun() ->
-      teleport_monitor:monitor_conn(Name),
-      receive
-        {connup, Name} -> Self ! {self(), ok}
-      end
-    end),
-  
+  Spec = conn_spec(Name, Config),
+  Pid = spawn(?MODULE, passive_monitor, [self(), Name]),
   %% start the load balancer
   case supervisor:start_child(?MODULE, Spec) of
-    {error, already_present} -> teleport_lib:sync_kill(Monitor), ok;
-    {error, {already_started, _Pid}} -> teleport_lib:sync_kill(Monitor), ok;
+    {error, already_present} -> kill_passive_monitor(Pid), true;
+    {error, {already_started, _Pid}} -> kill_passive_monitor(Pid), true;
     {ok, _Pid} ->
       receive
-        {Monitor, ok} -> ok
-      after 5000 ->
-        teleport_lib:sync_kill(Monitor),
-        {error, timeout}
+        {Pid, true} -> true;
+        {Pid, false} -> false
       end
   end.
 
@@ -60,6 +58,43 @@ disconnect(Name) ->
   _ = supervisor:delete_child(?MODULE, Sup),
   ok.
 
+
+connecttime() ->
+  case application:get_env(teleport, net_setuptime) of
+    {ok, Time} when is_number(Time), Time >= 120 ->
+      120 * 1000;
+    {ok,Time} when is_number(Time), Time > 0 ->
+      round(Time * 1000);
+    _ ->
+      ?SETUPTIME
+  end.
+
+passive_monitor(Parent, Name) ->
+  ok = teleport_monitor:monitor_conn(Name),
+  Ref = make_ref(),
+  Tref = erlang:send_after(connecttime(),self(),Ref),
+  receive
+    Ref ->
+      teleport_monitor:demonitor_conn(Name),
+      Parent ! {self(), false};
+    {connup, Name} ->
+      teleport_monitor:demonitor_conn(Name),
+      _ = erlang:cancel_timer(Tref),
+      Parent ! {self(), true}
+  end.
+
+kill_passive_monitor(Pid) ->
+  MRef = erlang:monitor(process, Pid),
+  try
+    catch exit(Pid, kill),
+    receive
+      {'DOWN', MRef, _, _, _} ->
+        ok
+    end
+  after
+    erlang:demonitor(MRef, [flush])
+  end.
+  
 
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
