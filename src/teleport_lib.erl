@@ -10,7 +10,8 @@
 
 -export([
   get_transport/1,
-  ssl_conf/2
+  ssl_conf/2,
+  sync_kill/1
 ]).
 
 -include("teleport.hrl").
@@ -88,3 +89,16 @@ find(Fun, [Head|Tail]) when is_function(Fun) ->
   end;
 find(_Fun, []) ->
   error.
+
+sync_kill(Pid) ->
+  MRef = erlang:monitor(process, Pid),
+  try
+      catch unlink(Pid),
+      catch exit(Pid, kill),
+    receive
+      {'DOWN', MRef, _, _, _} ->
+        ok
+    end
+  after
+    erlang:demonitor(MRef, [flush])
+  end.

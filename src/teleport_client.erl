@@ -113,6 +113,8 @@ wait_for_sbcast([], Good, Bad) ->
 
 
 do_call(Name, CallType, Mod, Fun, Args) ->
+  lager:info("call ~p~n", [{Name, CallType, Mod, Fun, Args}]),
+  lager:info("lb ~p~n", [ets:tab2list(teleport_lb)]),
   case teleport_lb:get_conn_pid(Name) of
     {ok, {_Pid, {Transport, Sock}}} ->
       Headers =
@@ -169,8 +171,7 @@ init(Parent, Name, Config) ->
   connect(State, Retry).
 
 connect(State, Retries) ->
-  #{name := Name,
-    host := Host,
+  #{host := Host,
     port := Port,
     transport := Transport,
     conf := Conf} = State,
@@ -186,7 +187,6 @@ connect(State, Retries) ->
   case Transport:connect(Host, Port, TransportOpts, ConnectTimeout) of
     {ok, Sock} ->
       {ok, HeartBeat} = timer:send_interval(5000, self(), heartbeat),
-      teleport_lb:connected(Name, {Transport, Sock}),
       true = ets:insert(teleport_outgoing_conns, {self(), Host, undefined}),
 
       Transport:setopts(Sock, [{packet, 4}, {active, once}]),
@@ -216,7 +216,7 @@ retry_loop(State=#{parent := Parent, conf  := Conf}, Retries) ->
         {retry_loop, State, Retries})
   end.
 
-do_handshake(State = #{ name := Name, conf := Conf }) ->
+do_handshake(State = #{ name := Name }) ->
   Cookie = erlang:get_cookie(),
   Packet = erlang:term_to_binary({connect, Cookie, Name}),
   case catch send(Packet, State) of
@@ -225,15 +225,10 @@ do_handshake(State = #{ name := Name, conf := Conf }) ->
     Error ->
       #{ host := Host, port:= Port} = State,
       lager:error(
-        "teleport: error while sending handshake to ~p:~p : ~w",
-        [Host, Port, Error]
+        "teleport: error while sending handshake to ~p:~p (~p): ~w",
+        [Host, Port, Name, Error]
       ),
-      Retry = maps:get(retry, Conf, 5),
-      connect(State#{
-        heartbeat => undefined,
-        sock => undefined,
-        missed_heartbeats => 0
-      }, Retry)
+      exit(normal)
   end.
 
 wait_handshake(State) ->
@@ -251,6 +246,7 @@ wait_handshake(State) ->
           lager:info("teleport: client connected to peer-node ~p[~p]~n", [Name, PeerNode]),
           ets:insert(teleport_incoming_conns, {self(), Host, PeerNode}),
           teleport_monitor:nodeup(PeerNode),
+          teleport_lb:connected(Name, {Transport, Sock}),
           loop(State#{ peer_node => PeerNode });
         {connection_rejected, Reason} ->
           lager:error("teleport: connection rejected", [Reason]),
@@ -262,25 +258,19 @@ wait_handshake(State) ->
           wait_handshake(State)
       catch
         error:badarg ->
-          #{ host := Host, port:= Port} = State,
           lager:error(
-            "teleport: error during handshake to ~p:~p : ~w",
-            [Host, Port, Data]
+            "teleport: client for ~p error during handshake to bad data : ~w",
+            [Name, Data]
           ),
           exit({badtcp, invalid_data})
       end;
     heartbeat ->
       handle_heartbeat(State, fun wait_handshake/1);
     {Closed, Sock} ->
-      cleanup(State),
+      handle_conn_closed(State, {error, Closed}),
       exit(normal);
-    {Error, Sock, _Reason} ->
-      #{ host := Host, port:= Port} = State,
-      lager:error(
-        "teleport: tcp error during handshake with ~p:~p : ~w",
-        [Host, Port, Error]
-      ),
-      cleanup(State),
+    {Error, Sock, Reason} ->
+      handle_conn_closed(State, {error, {Error, Reason}}),
       exit(normal);
     {system, From, Request} ->
       sys:handle_system_msg(Request, From, Parent, ?MODULE, [],
@@ -295,15 +285,10 @@ loop(State = #{parent := Parent, transport := Transport, sock := Sock}) ->
     {OK, Sock, Data} ->
       handle_data(Data, State);
     {Closed, Sock} ->
-      cleanup(State),
+      handle_conn_closed(State, {error, Closed}),
       exit(normal);
     {Error, Sock, Reason} ->
-      #{ host := Host, port:= Port} = State,
-      lager:error(
-        "teleport: tcp error with ~p:~p : ~w",
-        [Host, Port, Reason]
-      ),
-      cleanup(State),
+      handle_conn_closed(State, {error, {Error, Reason}}),
       exit(normal);
     {system, From, Request} ->
       sys:handle_system_msg(Request, From, Parent, ?MODULE, [],
@@ -338,7 +323,7 @@ handle_data(Data, State) ->
           "teleport: ~p, tcp error with ~p:~p : ~w",
           [Db, Host, Port, Data]
         ),
-        exit({badtcp, invalid_data})
+        exit(normal)
   end.
 
 
@@ -354,10 +339,18 @@ handle_heartbeat(State, Fun) ->
         "teleport: client missed ~p heartbeats from ~p:~p. Closing connection",
         [M2, Host, Port]
       ),
-      cleanup(State);
+      Fun(cleanup(State));
     true ->
       Fun(State#{missed_heartbeats => M2})
   end.
+
+handle_conn_closed(State = #{name := Name, peer_node := PeerNode}, Error) ->
+  lager:info(
+    "teleport: lost client connection  from ~p[~p]. Reason: ~p~n",
+    [Name, PeerNode, Error]
+  ),
+  _ = cleanup(State).
+
 
 system_continue(_, _, {retry_loop, State, Retry}) ->
   retry_loop(State, Retry);
@@ -367,12 +360,12 @@ system_continue(_, _, {loop, State}) ->
   loop(State).
 
 -spec system_terminate(any(), _, _, _) -> no_return().
-system_terminate(Reason, _, _, {_, State, _}) ->
-  cleanup(State),
-  exit(Reason);
-system_terminate(Reason, _, _, {_, State}) ->
-  cleanup(State),
-  exit(Reason).
+system_terminate(_Reason, _, _, {_, State, _}) ->
+  _ = cleanup(State),
+  ok;
+system_terminate(_Reason, _, _, {_, State}) ->
+  _ = cleanup(State),
+  ok.
 
 system_code_change(Misc, _, _, _) ->
   {ok, Misc}.
@@ -383,27 +376,25 @@ send(Msg,  #{transport := Transport, sock := Sock}) ->
   Res.
 
 cleanup(State) ->
-  #{conf := Conf,
-    heartbeat := Heartbeat,
+  #{heartbeat := Heartbeat,
     name := Name,
     sock := Sock,
     transport := Transport,
     peer_node := PeerNode} = State,
-  
+
   if
     PeerNode =/= undefined -> teleport_monitor:nodedown(PeerNode);
     true -> ok
   end,
-  
+
   _ = teleport_lb:disconnected(Name),
   catch ets:delete(teleport_incoming_conns, self()),
 
   catch Transport:close(Sock),
   catch timer:cancel(Heartbeat),
-  Retry = maps:get(retry, Conf, 5),
 
-  connect(State#{
+  State#{
     heartbeat => undefined,
     sock => undefined,
     missed_heartbeats => 0
-  }, Retry).
+  }.

@@ -32,12 +32,26 @@ start_link() ->
 
 connect(Name, Config) ->
   Spec =conn_spec(Name, Config),
-
+  Self = self(),
+  Monitor = spawn_link(
+    fun() ->
+      teleport_monitor:monitor_conn(Name),
+      receive
+        {connup, Name} -> Self ! {self(), ok}
+      end
+    end),
+  
   %% start the load balancer
   case supervisor:start_child(?MODULE, Spec) of
-    {error, already_present} -> ok;
-    {error, {already_started, _Pid}} -> ok;
-    {ok, _Pid} -> ok
+    {error, already_present} -> barrel_lib:sync_kill(Monitor), ok;
+    {error, {already_started, _Pid}} -> barrel_lib:sync_kill(Monitor), ok;
+    {ok, _Pid} ->
+      receive
+        {Monitor, ok} -> ok
+      after 5000 ->
+        barrel_lib:sync_kill(Monitor),
+        {error, timeout}
+      end
   end.
 
 disconnect(Name) ->
