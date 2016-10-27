@@ -3,4 +3,4 @@ image: erlang:19.1
 test:
   script:
     - epmd -daemon
-    - ./support/rebar3 ct
+    - ./support/rebar3 compile
