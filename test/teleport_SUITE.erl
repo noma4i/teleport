@@ -48,6 +48,8 @@ basic(_Config) ->
 
   ok = teleport:connect(test, #{}),
 
+  3 = teleport:call(test, test_module, add, [1,2]),
+
   ok = stop_remote_server(RemoteNode),
   ok = stop_slave(remote_teleport),
   ok.
