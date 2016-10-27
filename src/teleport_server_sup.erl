@@ -46,10 +46,10 @@ stop_server(Name) ->
     ok ->
       _ = supervisor:delete_child(?MODULE, ServerRef),
       _ = ranch_server:cleanup_listener_opts(ServerRef),
-      lager:info("stopped server ~p~n", [Name]),
+      lager:info("teleport: stopped server ~p~n", [Name]),
       ok;
     Error ->
-      lager:info("error stopping server ~p~n", [Name]),
+      lager:error("teleport: error stopping server ~p~n", [Name]),
       Error
   end.
 
