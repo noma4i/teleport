@@ -177,7 +177,7 @@ connect(State, Retries) ->
   TransportOpts = case Transport of
               ranch_ssl ->
                 [{active, once}, binary, {packet, 4}, {reuseaddr, true}
-                | openkvs_lib:ssl_conf(client, Host)];
+                | teleport_lib:ssl_conf(client, Host)];
               ranch_tcp ->
                 [{active, once}, binary, {packet, 4}, {reuseaddr, true}]
   end,
@@ -300,7 +300,7 @@ loop(State = #{parent := Parent, transport := Transport, sock := Sock}) ->
     {Error, Sock, Reason} ->
       #{ host := Host, port:= Port} = State,
       lager:error(
-        "openkvs: tcp error with ~p:~p : ~w",
+        "teleport: tcp error with ~p:~p : ~w",
         [Host, Port, Reason]
       ),
       cleanup(State),
@@ -311,7 +311,7 @@ loop(State = #{parent := Parent, transport := Transport, sock := Sock}) ->
     heartbeat ->
       handle_heartbeat(State, fun loop/1);
     Any ->
-      lager:info("client got unknown message: ~p", [Any]),
+      lager:info("teleport:client got unknown message: ~p", [Any]),
       loop(State)
   end.
 

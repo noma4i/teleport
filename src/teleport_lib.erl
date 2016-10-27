@@ -22,7 +22,7 @@ get_transport(Mod) -> Mod.
 
 -spec ssl_conf(client | server, inet:hostname() | inet:ip_address()) -> proplists:proplists().
 ssl_conf(client, Host) ->
-  TrustStore = application:get_env(openkvs, client_ssl_store, []),
+  TrustStore = application:get_env(teleport, client_ssl_store, []),
   ExtraOpts0 = proplists:get_value(Host, TrustStore, []),
   DefaultOpts = lists:append(?SSL_DEFAULT_COMMON_OPTS, ?SSL_DEFAULT_CLIENT_OPTS),
   Insecure =  proplists:get_value(insecure, ExtraOpts0),
@@ -39,7 +39,7 @@ ssl_conf(client, Host) ->
               end,
   merge_opts(ExtraOpts, DefaultOpts);
 ssl_conf(server, Host) ->
-  TrustStore = application:get_env(openkvs, client_ssl_store, []),
+  TrustStore = application:get_env(teleport, client_ssl_store, []),
   ExtraOpts = proplists:get_value(Host, TrustStore, []),
   DefaultOpts = lists:append(?SSL_DEFAULT_COMMON_OPTS, ?SSL_DEFAULT_SERVER_OPTS),
   merge_opts(ExtraOpts, DefaultOpts).
