@@ -24,7 +24,13 @@
   blocking_call/4,
   blocking_call/5,
   abcast/3,
-  sbcast/3
+  sbcast/3,
+  monitor_node/1,
+  demonitor_node/1,
+  monitor_conn/1,
+  demonitor_conn/1,
+  monitor_nodes/1,
+  monitor_conns/1
 ]).
 
 -include("teleport.hrl").
@@ -41,7 +47,27 @@ connect(Name) when is_atom(Name) ->
   connect(Name, #{host => Host, port => ?DEFAULT_PORT}).
 
 connect(Name, Config) ->
-  teleport_conns_sup:connect(Name, Config).
+  Self = self(),
+  PassiveMonitor = spawn_link(
+    fun() ->
+        teleport_monitor:monitor_conn(Name),
+        receive
+          {connup, Name} -> Self ! {self(), ok}
+        after 30000 ->
+          Self ! {self(), timeout},
+          teleport_monitor:demonitor_conn(Name)
+        end
+      end),
+  case teleport_conns_sup:connect(Name, Config) of
+    ok ->
+      receive
+        {PassiveMonitor, ok} -> ok;
+        {PassiveMonitor, timeout} -> {error, timeout}
+      end;
+    Error ->
+      exit(PassiveMonitor, kill),
+      Error
+  end.
 
 disconnect(Name) ->
   teleport_conns_sup:disconnect(Name).
@@ -53,6 +79,24 @@ incoming_conns() ->
 outgoing_conns() ->
   lists:usort(
     [Node || {_, _, Node} <- ets:tab2list(teleport_outgoing_conns)]).
+
+
+%% MONITOR API
+
+monitor_nodes(true) -> teleport_monitor:monitor_node('$all_nodes');
+monitor_nodes(false) -> teleport_monitor:demonitor_node('$all_nodes').
+
+monitor_conns(true) -> teleport_monitor:monitor_conn('$all_conns');
+monitor_conns(false) -> teleport_monitor:demonitor_conn('$all_conns').
+
+
+monitor_node(Name) -> teleport_monitor:monitor_node(Name).
+
+demonitor_node(Name) -> teleport_monitor:demonitor_node(Name).
+
+monitor_conn(Name) -> teleport_monitor:monitor_conn(Name).
+
+demonitor_conn(Name) -> teleport_monitor:demonitor_conn(Name).
 
 
 %% RPC API

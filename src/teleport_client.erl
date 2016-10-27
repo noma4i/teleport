@@ -163,7 +163,8 @@ init(Parent, Name, Config) ->
     port => Port,
     transport => Transport,
     missed_heartbeats => 0,
-    conf => Config
+    conf => Config,
+    peer_node => undefined
   },
   connect(State, Retry).
 
@@ -249,7 +250,8 @@ wait_handshake(State) ->
         {connected, PeerNode} ->
           lager:info("teleport: client connected to peer-node ~p[~p]~n", [Name, PeerNode]),
           ets:insert(teleport_incoming_conns, {self(), Host, PeerNode}),
-          loop(State);
+          teleport_monitor:nodeup(PeerNode),
+          loop(State#{ peer_node => PeerNode });
         {connection_rejected, Reason} ->
           lager:error("teleport: connection rejected", [Reason]),
           exit({connection_rejected, Reason});
@@ -385,8 +387,14 @@ cleanup(State) ->
     heartbeat := Heartbeat,
     name := Name,
     sock := Sock,
-    transport := Transport} = State,
-
+    transport := Transport,
+    peer_node := PeerNode} = State,
+  
+  if
+    PeerNode =/= undefined -> teleport_monitor:nodedown(PeerNode);
+    true -> ok
+  end,
+  
   _ = teleport_lb:disconnected(Name),
   catch ets:delete(teleport_incoming_conns, self()),
 

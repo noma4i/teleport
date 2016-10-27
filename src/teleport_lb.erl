@@ -103,6 +103,7 @@ handle_call({connected, Client}, _From, State = #{ name := Name, workers := Work
               Conn#teleport_lb{num_conns = N+1, conns = Conns ++ [Client]}
           end,
   true = ets:insert(teleport_lb, Conn2),
+  teleport_monitor:connup(Name),
   {reply, ok, State#{workers => queue:in(Client, Workers)}};
 
 handle_call({disconnected, Pid}, _From, State = #{ name := Name}) ->
@@ -121,6 +122,7 @@ handle_call({disconnected, Pid}, _From, State = #{ name := Name}) ->
           ets:insert(teleport_lb, Conn#teleport_lb{num_conns = N - 1, conns = Conns1})
       end
   end,
+  teleport_monitor:conndown(Name),
   {reply, ok, State};
 
 handle_call(get_conn_pid, _From, State = #{workers := Workers}) ->

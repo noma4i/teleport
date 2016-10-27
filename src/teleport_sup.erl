@@ -41,6 +41,14 @@ init([]) ->
     {keypos, 2}
   ]),
 
+  Monitor = #{
+    id => teleport_monitor,
+    start => {teleport_monitor, start_link, []},
+    restart => permanent,
+    shutdown => 2000,
+    type => worker,
+    modules => [teleport_monitor]
+  },
 
   ServerSup = #{
     id => teleport_server_sup,
@@ -59,8 +67,10 @@ init([]) ->
     type => supervisor,
     modules => [teleport_conns_sup]
   },
+  
+  
 
-  {ok, { {one_for_one, 5, 10}, [ServerSup, ConnsSup]} }.
+  {ok, { {one_for_one, 5, 10}, [Monitor, ServerSup, ConnsSup]} }.
 
 %%====================================================================
 %% Internal functions
