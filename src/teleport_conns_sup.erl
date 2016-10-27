@@ -43,13 +43,13 @@ connect(Name, Config) ->
   
   %% start the load balancer
   case supervisor:start_child(?MODULE, Spec) of
-    {error, already_present} -> barrel_lib:sync_kill(Monitor), ok;
-    {error, {already_started, _Pid}} -> barrel_lib:sync_kill(Monitor), ok;
+    {error, already_present} -> teleport_lib:sync_kill(Monitor), ok;
+    {error, {already_started, _Pid}} -> teleport_lib:sync_kill(Monitor), ok;
     {ok, _Pid} ->
       receive
         {Monitor, ok} -> ok
       after 5000 ->
-        barrel_lib:sync_kill(Monitor),
+        teleport_lib:sync_kill(Monitor),
         {error, timeout}
       end
   end.
