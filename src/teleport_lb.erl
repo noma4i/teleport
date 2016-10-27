@@ -104,7 +104,6 @@ handle_call({connected, Client}, _From, State = #{ name := Name, workers := Work
           end,
   true = ets:insert(teleport_lb, Conn2),
   teleport_monitor:connup(Name),
-  io:format("connected, ~p~n", [Name]),
   {reply, ok, State#{workers => queue:in(Client, Workers)}};
 
 handle_call({disconnected, Pid}, _From, State = #{ name := Name}) ->
@@ -112,7 +111,7 @@ handle_call({disconnected, Pid}, _From, State = #{ name := Name}) ->
     [] ->  ok;
     [Conn = #teleport_lb{num_conns = N, conns=Conns}] ->
       case lists:filter(
-          fun({X_pid, _, _}) ->
+          fun({X_pid, _}) ->
             not (X_pid =:= Pid) end,
           Conns) of
         Conns ->

@@ -47,27 +47,7 @@ connect(Name) when is_atom(Name) ->
   connect(Name, #{host => Host, port => ?DEFAULT_PORT}).
 
 connect(Name, Config) ->
-  Self = self(),
-  PassiveMonitor = spawn_link(
-    fun() ->
-        teleport_monitor:monitor_conn(Name),
-        receive
-          {connup, Name} -> Self ! {self(), ok}
-        after 30000 ->
-          Self ! {self(), timeout},
-          teleport_monitor:demonitor_conn(Name)
-        end
-      end),
-  case teleport_conns_sup:connect(Name, Config) of
-    ok ->
-      receive
-        {PassiveMonitor, ok} -> ok;
-        {PassiveMonitor, timeout} -> {error, timeout}
-      end;
-    Error ->
-      exit(PassiveMonitor, kill),
-      Error
-  end.
+  teleport_conns_sup:connect(Name, Config).
 
 disconnect(Name) ->
   teleport_conns_sup:disconnect(Name).
