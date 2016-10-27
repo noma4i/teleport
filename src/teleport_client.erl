@@ -84,7 +84,7 @@ sbcast_1(Parent, Name, ProcName, Msg) ->
       case Transport:send(Sock, Packet) of
         ok -> wait_sbcast_reply(Parent, Name, Headers);
         _ -> Parent ! {sbcast_failed, self(), Name}
-        
+
       end;
     _ ->
       Parent ! {sbcast_failed, self(), Name}
@@ -97,7 +97,7 @@ wait_sbcast_reply(Parent, Name, Headers) ->
       Parent ! {sbcast_success, self(), Name};
     {sbcast_failed, Headers} ->
       Parent ! {sbcast_failed, self(), Name}
-    
+
   end.
 
 wait_for_sbcast([Pid | Rest], Good, Bad) ->
@@ -109,7 +109,7 @@ wait_for_sbcast([Pid | Rest], Good, Bad) ->
   end;
 wait_for_sbcast([], Good, Bad) ->
   {Good, Bad}.
-  
+
 
 
 do_call(Name, CallType, Mod, Fun, Args) ->
@@ -129,8 +129,9 @@ do_call(Name, CallType, Mod, Fun, Args) ->
           ),
           Error
       end;
-    _ ->
-      {badrpc, not_connected}
+    Error ->
+      lager:info("teleport: error while retrieving a connection for ~p", [Name]),
+      Error
   end.
 
 
@@ -140,7 +141,7 @@ wait_reply(Headers, Timeout) ->
   after Timeout ->
     {error, timeout}
   end.
-  
+
 
 start_link(Name, Config) ->
   proc_lib:start_link(?MODULE, init, [self(), Name, Config]).
@@ -174,19 +175,19 @@ connect(State, Retries) ->
     conf := Conf} = State,
   TransportOpts = case Transport of
               ranch_ssl ->
-                [{active, once}, binary, {packet, 4}, {reuseaddr, true} 
+                [{active, once}, binary, {packet, 4}, {reuseaddr, true}
                 | openkvs_lib:ssl_conf(client, Host)];
               ranch_tcp ->
                 [{active, once}, binary, {packet, 4}, {reuseaddr, true}]
   end,
-  
+
   ConnectTimeout = maps:get(connect_timeout, Conf, 5000),
   case Transport:connect(Host, Port, TransportOpts, ConnectTimeout) of
     {ok, Sock} ->
       {ok, HeartBeat} = timer:send_interval(5000, self(), heartbeat),
       teleport_lb:connected(Name, {Transport, Sock}),
       true = ets:insert(teleport_outgoing_conns, {self(), Host, undefined}),
-      
+
       Transport:setopts(Sock, [{packet, 4}, {active, once}]),
       do_handshake(State#{sock => Sock,
                           heartbeat => HeartBeat,
@@ -233,7 +234,7 @@ do_handshake(State = #{ name := Name, conf := Conf }) ->
         missed_heartbeats => 0
       }, Retry)
   end.
-  
+
 wait_handshake(State) ->
   #{parent := Parent,
     name := Name,
@@ -385,14 +386,14 @@ cleanup(State) ->
     name := Name,
     sock := Sock,
     transport := Transport} = State,
-  
+
   _ = teleport_lb:disconnected(Name),
   catch ets:delete(teleport_incoming_conns, self()),
-  
+
   catch Transport:close(Sock),
   catch timer:cancel(Heartbeat),
   Retry = maps:get(retry, Conf, 5),
-  
+
   connect(State#{
     heartbeat => undefined,
     sock => undefined,
