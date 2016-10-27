@@ -18,8 +18,6 @@
 %% Supervisor callbacks
 -export([init/1]).
 
--include("teleport.hrl").
-
 
 %%====================================================================
 %% API functions
@@ -33,27 +31,19 @@ start_link() ->
 %%====================================================================
 
 connect(Name, Config) ->
+  Spec =conn_spec(Name, Config),
+
   %% start the load balancer
-  case supervisor:start_child(?MODULE, lb_spec(Name)) of
+  case supervisor:start_child(?MODULE, Spec) of
     {error, already_present} -> ok;
     {error, {already_started, _Pid}} -> ok;
-    {ok, _Pid} ->
-      lists:foreach(
-        fun(Spec) ->
-          supervisor:start_child(?MODULE, Spec)
-        end, client_specs(Name, Config))
+    {ok, _Pid} -> ok
   end.
 
 disconnect(Name) ->
-  Children = supervisor:which_children(?MODULE),
-  lists:foreach(
-    fun({{'teleport_lb', X_Name}=LbId, _, _, _}) when X_Name =:= Name ->
-          _ = supervisor:terminate_child(?MODULE, LbId),
-          _ = supervisor:delete_child(?MODULE, LbId);
-       ({{'teleport_client', X_Name, _, _}=ClientId, _, _, _}) when X_Name =:= Name ->
-         _ = supervisor:terminate_child(?MODULE, ClientId),
-         _ = supervisor:delete_child(?MODULE, ClientId)
-    end, Children),
+  Sup = conn_sup_name(Name),
+  _ = supervisor:terminate_child(?MODULE, Sup),
+  _ = supervisor:delete_child(?MODULE, Sup),
   ok.
 
 
@@ -61,45 +51,20 @@ disconnect(Name) ->
 init([]) ->
   Clients = application:get_env(teleport, clients, []),
   Specs = lists:map(fun({Name, Config}) ->
-      [lb_spec(Name) | client_specs(Name, Config)]
+      conn_spec(Name, Config)
     end, Clients),
-  {ok, {{one_for_one, 1, 5}, Specs}}.
+  {ok, { {one_for_one, 1, 5}, Specs}}.
 
 
-lb_spec(Name) ->
-  #{id => {'teleport_lb', Name},
-    start => {teleport_lb, start_link, [Name]},
-    restart => temporary,
-    shutdown => 5000,
-    type => worker,
-    modules => [teleport_lb]
-  }.
+conn_sup_name(Name) ->
+  list_to_atom(atom_to_list(Name) ++ "-sup").
 
-client_specs(Name, Config) ->
-  Configs = case is_map(Config) of
-              true -> [Config];
-              false when is_list(Config) -> Config;
-              false -> error(badarg)
-            end,
+conn_spec(Name, Config) ->
+  Sup = conn_sup_name(Name),
   
-  
-  ClientSpecs = lists:map(
-    fun(Conf) ->
-      NumClients = maps:get(num_connections, Conf, 1),
-      Host = maps:get(host, Conf, "localhost"),
-      Port = maps:get(port, Conf, ?DEFAULT_PORT),
-      lists:map(
-        fun(I) ->
-          client_spec({'teleport_client', Name, {Host, Port}, I}, Name, Config)
-        end,lists:seq(1, NumClients))
-    end, Configs),
-  lists:flatten(ClientSpecs).
-
-
-client_spec(Id, Name, Config) ->
-  #{id => Id,
-    start => {teleport_client, start_link, [Name, Config]},
+  #{id => Sup,
+    start => {teleport_conn, start_link, [Sup, Name, Config]},
     restart => permanent,
     shutdown => 2000,
-    type => worker,
-    modules => [teleport_client]}.
+    type => supervisor,
+    modules => [teleport_conn]}.
