@@ -14,7 +14,7 @@ start_link(Sup, Name, Config) ->
 
 init([Name, Config]) ->
   Specs = [lb_spec(Name) | client_specs(Name, Config)],
-  {ok, {{one_for_all, 5, 60}, Specs}}.
+  {ok, {{one_for_one, 5, 60}, Specs}}.
 
 
 

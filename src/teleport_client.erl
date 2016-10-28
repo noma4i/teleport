@@ -113,8 +113,6 @@ wait_for_sbcast([], Good, Bad) ->
 
 
 do_call(Name, CallType, Mod, Fun, Args) ->
-  lager:info("call ~p~n", [{Name, CallType, Mod, Fun, Args}]),
-  lager:info("lb ~p~n", [ets:tab2list(teleport_lb)]),
   case teleport_lb:get_conn_pid(Name) of
     {ok, {_Pid, {Transport, Sock}}} ->
       Headers =
@@ -238,7 +236,7 @@ wait_handshake(State) ->
     host := Host,
     transport := Transport,
     sock := Sock} = State,
-  Transport:setopts(Sock, [{active, once}]),
+  Transport:setopts(Sock, [{packet, 4}, {active, once}]),
   {OK, Closed, Error} = Transport:messages(),
   receive
     {OK, Sock, Data} ->
@@ -251,7 +249,8 @@ wait_handshake(State) ->
           loop(State#{ peer_node => PeerNode });
         {connection_rejected, Reason} ->
           lager:error("teleport: connection rejected", [Reason]),
-          exit({connection_rejected, Reason});
+          handle_conn_closed(State, {connection_rejected, Reason}),
+          exit(normal);
         heartbeat ->
           loop(State#{missed_heartbeats => 0});
         OtherMsg ->
@@ -259,11 +258,12 @@ wait_handshake(State) ->
           wait_handshake(State)
       catch
         error:badarg ->
-          lager:error(
+          lager:info(
             "teleport: client for ~p error during handshake to bad data : ~w",
             [Name, Data]
           ),
-          exit({badtcp, invalid_data})
+          _ = cleanup(State),
+          exit(normal)
       end;
     heartbeat ->
       handle_heartbeat(State, fun wait_handshake/1);
@@ -326,7 +326,7 @@ handle_data(Data, State) ->
   catch
       error:badarg ->
         #{ db := Db, host := Host, port:= Port} = State,
-        lager:error(
+        lager:info(
           "teleport: ~p, tcp error with ~p:~p : ~w",
           [Db, Host, Port, Data]
         ),

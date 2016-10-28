@@ -49,16 +49,17 @@ wait_for_handshake(State) ->
           lager:info("teleport: server connected to peer node: ~p~n", [PeerNode]),
           ets:insert(teleport_incoming_conns, {self(), PeerHost, PeerNode}),
           Packet = erlang:term_to_binary({connected, node()}),
-          ok =  Transport:send(Sock, Packet),
+          ok = Transport:send(Sock, Packet),
           wait_for_data(State);
         {connect, _InvalidCookie} ->
           Packet = erlang:term_to_binary({connection_rejected, invalid_cookie}),
           _ = (catch erlang:send(Sock, Packet)),
-          lager:error("teleport: invalid cookie from ~p", [PeerHost]),
+          lager:info("teleport: invalid cookie from ~p", [PeerHost]),
           exit({badrpc, invalid_cookie});
         OtherMsg ->
           Packet = erlang:term_to_binary({connection_rejected, {invalid_msg, OtherMsg}}),
-          _ = (catch erlang:send(Sock, Packet))
+          _ = (catch erlang:send(Sock, Packet)),
+          wait_for_handshake(State)
       catch
         error:badarg ->
           lager:error("teleport: bad handshake from ~p: ~w", [PeerHost, Data]),
@@ -126,7 +127,7 @@ handle_incoming_data(Data, State) ->
       _ = (catch send(State, Packet))
   catch
     error:badarg ->
-      lager:debug("teleport: bad data: ~w", [Data]),
+      lager:info("teleport: bad data: ~w", [Data]),
       cleanup(State),
       exit({badtcp, invalid_data})
   end.

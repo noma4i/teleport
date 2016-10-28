@@ -33,8 +33,11 @@ start_link() ->
 
 start_server(Name, Config) when is_map(Config) ->
   case supervisor:start_child(?MODULE, server_spec(server_name(Name), Config)) of
-    {ok, Pid} -> {ok, Pid};
-    {error, {already_started, Pid}} -> {ok, Pid}
+    {ok, Pid} ->
+      lager:info("teleport: start server: ~p[~p]", [Name, node()]),
+      {ok, Pid};
+    {error, {already_started, Pid}} ->
+      {ok, Pid}
   end;
 start_server(Name, Config) when is_list(Config) ->
   start_server(Name, maps:from_list(Config));
@@ -46,7 +49,7 @@ stop_server(Name) ->
     ok ->
       _ = supervisor:delete_child(?MODULE, ServerRef),
       _ = ranch_server:cleanup_listener_opts(ServerRef),
-      lager:info("teleport: stopped server ~p~n", [Name]),
+      lager:info("teleport: stopped server ~p[~p]~n", [Name, node()]),
       ok;
     Error ->
       lager:error("teleport: error stopping server ~p~n", [Name]),
