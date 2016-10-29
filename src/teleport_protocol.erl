@@ -123,8 +123,6 @@ wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
 wait_for_data(Event, EventType, Data) ->
   handle_event(Event, wait_for_data, EventType, Data).
 
-
-
 handle_event(info, _State, heartbeat, Data) ->
   #{transport := Transport,
     sock := Sock,

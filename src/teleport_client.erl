@@ -112,8 +112,6 @@ wait_for_sbcast([Pid | Rest], Good, Bad) ->
 wait_for_sbcast([], Good, Bad) ->
   {Good, Bad}.
 
-
-
 do_call(Name, CallType, Mod, Fun, Args) ->
   case teleport_lb:get_conn_pid(Name) of
     {ok, {_Pid, {Transport, Sock}}} ->
@@ -147,7 +145,6 @@ wait_reply(Headers, Timeout) ->
 
 start_link(Name, Config) ->
   gen_statem:start_link(?MODULE,[Name, Config], []).
-
 
 init([Name, Config]) ->
   process_flag(trap_exit, true),
@@ -218,7 +215,6 @@ connect(info, connect, Data) ->
 connect(EventType, EventContent, Data) ->
   handle_event(EventType, connect, EventContent,Data).
 
-
 wait_handshake(info, {OK, Sock, Payload}, Data = #{ transport := Transport, sock := Sock, ok := OK}) ->
   #{name := Name, host := Host} = Data,
   try erlang:binary_to_term(Payload) of
@@ -248,7 +244,6 @@ wait_handshake(info, {OK, Sock, Payload}, Data = #{ transport := Transport, sock
   end;
 wait_handshake(EventType, EventContent, Data) ->
   handle_event(EventType, wait_handshake, EventContent,Data).
-
 
 wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
   try erlang:binary_to_term(PayLoad) of
