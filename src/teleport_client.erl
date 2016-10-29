@@ -7,7 +7,7 @@
 %% file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 -module(teleport_client).
-
+-behaviour(gen_statem).
 
 
 -export([
@@ -19,20 +19,25 @@
   sbcast/3
 ]).
 
-%% internal callbacks
+
+%% gen_statem callbacks
 -export([
-  init/3,
-  retry_loop/2,
-  wait_handshake/1
+  terminate/3,
+  code_change/4,
+  init/1,
+  callback_mode/0
 ]).
 
 -export([
-  system_continue/3,
-  system_terminate/4,
-  system_code_change/4
+  connect/3,
+  wait_handshake/3,
+  wait_for_data/3
 ]).
+
 
 -include("teleport.hrl").
+
+-record(retry, {n, delay, max}).
 
 
 call(Name, Mod, Fun, Args, Timeout) ->
@@ -144,35 +149,49 @@ wait_reply(Headers, Timeout) ->
 
 
 start_link(Name, Config) ->
-  proc_lib:start_link(?MODULE, init, [self(), Name, Config]).
+  gen_statem:start_link(?MODULE,[Name, Config], []).
 
 
-init(Parent, Name, Config) ->
-  ok = proc_lib:init_ack(Parent, {ok, self()}),
+init([Name, Config]) ->
   process_flag(trap_exit, true),
-
+  self() ! connect,
+  %% initialize the data
   Host = maps:get(host, Config, "localhost"),
   Port = maps:get(port, Config, ?DEFAULT_PORT),
-
-  Retry = maps:get(retry, Config, 3),
+  Retries = maps:get(retry, Config, 3),
   Transport = maps:get(transport, Config, ranch_tcp),
-  State = #{
-    parent => Parent,
-    name => Name,
-    host => Host,
-    port => Port,
-    transport => Transport,
-    missed_heartbeats => 0,
-    conf => Config,
-    peer_node => undefined
-  },
-  connect(State, {Retry, 200, teleport_conns_sup:connecttime()}).
+  {OK, _Closed, _Error} = Transport:messages(),
+  Data =
+    #{
+      name => Name,
+      host => Host,
+      port => Port,
+      transport => Transport,
+      sock => undefined,
+      missed_heartbeats => 0,
+      conf => Config,
+      peer_node => undefined,
+      retry => {Retries, 200, teleport_conns_sup:connecttime()},
+      ok => OK
+    },
+  {ok, connect, Data}.
 
-connect(State, {Retries, Delay, Max}) ->
+callback_mode() -> state_functions.
+
+terminate(_Reason, _State, Data) ->
+  _ = cleanup(Data),
+  ok.
+
+code_change(_OldVsn, State, Data, _Extra) ->
+  {ok, State, Data}.
+
+connect(info, connect, Data) ->
   #{host := Host,
     port := Port,
     transport := Transport,
-    conf := Conf} = State,
+    conf := Conf,
+    retry := {Retries, Delay, Max}} = Data,
+
   TransportOpts = case Transport of
               ranch_ssl ->
                 [{active, once}, binary, {packet, 4}, {reuseaddr, true}
@@ -180,215 +199,145 @@ connect(State, {Retries, Delay, Max}) ->
               ranch_tcp ->
                 [{active, once}, binary, {packet, 4}, {reuseaddr, true}]
   end,
-
   ConnectTimeout = maps:get(connect_timeout, Conf, 5000),
+
   case Transport:connect(Host, Port, TransportOpts, ConnectTimeout) of
     {ok, Sock} ->
       {ok, HeartBeat} = timer:send_interval(5000, self(), heartbeat),
       true = ets:insert(teleport_outgoing_conns, {self(), Host, undefined}),
       Transport:setopts(Sock, [{packet, 4}, {active, once}]),
-      do_handshake(State#{sock => Sock,
-                          heartbeat => HeartBeat,
-                          missed_heartbeats => 0});
-    {error, _} ->
-      retry(State, {Retries - 1, rand_increment(Delay, Max), Max})
-  end.
+      Data2 = Data#{sock => Sock, heartbeat => HeartBeat,  missed_heartbeats => 0},
+      ok = send_handshake(Data2),
+      {next_state, wait_handshake, Data2};
+    {error, _Error} ->
+      if
+        Retries /= 0 ->
+          _ = erlang:send_after(Delay, self(), connect),
+          {keep_state, Data#{ retry => {Retries - 1, rand_increment(Delay, Max), Max} }};
+        true ->
+          {stop, normal, Data}
+      end
+  end;
+connect(EventType, EventContent, Data) ->
+  handle_event(EventType, connect, EventContent,Data).
 
-%% Exit normally if the retry functionality has been disabled.
-%% TODO: add exponential backlog
-retry(_, {0, _, _}) ->
-  ok;
-retry(State, Retries) ->
-  retry_loop(State, Retries).
 
-%% Too many retries, give up.
-retry_loop(_, {0, _, _}) ->
-  error(gone);
-retry_loop(State=#{parent := Parent}, {Retries, Delay, Max}) ->
-  _ = erlang:send_after(Delay, self(), retry),
-  receive
-    retry ->
-      connect(State, {Retries, Delay, Max});
-    {system, From, Request} ->
-      sys:handle_system_msg(Request, From, Parent, ?MODULE, [],
-        {retry_loop, State, {Retries, Delay, Max}})
-  end.
-
-do_handshake(State = #{ name := Name }) ->
-  Cookie = erlang:get_cookie(),
-  Packet = erlang:term_to_binary({connect, Cookie, Name}),
-  case catch send(Packet, State) of
-    ok ->
-      wait_handshake(State);
-    Error ->
-      #{ host := Host, port:= Port} = State,
+wait_handshake(info, {OK, Sock, Payload}, Data = #{ transport := Transport, sock := Sock, ok := OK}) ->
+  #{name := Name, host := Host} = Data,
+  try erlang:binary_to_term(Payload) of
+    {connected, PeerNode} ->
+      lager:info("teleport: client connected to peer-node ~p[~p]~n", [Name, PeerNode]),
+      ets:insert(teleport_incoming_conns, {self(), Host, PeerNode}),
+      teleport_monitor:nodeup(PeerNode),
+      teleport_lb:connected(Name, {Transport, Sock}),
+      {next_state, wait_for_data, activate_socket(Data#{peer_node => PeerNode})};
+    {connection_rejected, Reason} ->
+      lager:error("teleport: connection rejected", [Reason]),
+      handle_conn_closed(Data, wait_handshake, {connection_rejected, Reason}),
+      {stop, normal, Data};
+    heartbeat ->
+      {keep_statee, activate_socket(Data#{missed_heartbeats => 0})};
+    _OtherMsg ->
+      lager:info("teleport: got unknown message ~p~n", [_OtherMsg]),
+      {keep_state, activate_socket(Data)}
+  catch
+    error:badarg ->
       lager:info(
-        "teleport: error while sending handshake to ~p:~p (~p): ~w",
-        [Host, Port, Name, Error]
+        "teleport: client for ~p error during handshake to bad data : ~w",
+        [Name, Payload]
       ),
-      cleanup(State),
-      exit(normal)
-  end.
-
-wait_handshake(State) ->
-  #{parent := Parent,
-    name := Name,
-    host := Host,
-    transport := Transport,
-    sock := Sock} = State,
-  Transport:setopts(Sock, [{packet, 4}, {active, once}]),
-  {OK, Closed, Error} = Transport:messages(),
-  receive
-    {OK, Sock, Data} ->
-      try erlang:binary_to_term(Data) of
-        {connected, PeerNode} ->
-          lager:info("teleport: client connected to peer-node ~p[~p]~n", [Name, PeerNode]),
-          ets:insert(teleport_incoming_conns, {self(), Host, PeerNode}),
-          teleport_monitor:nodeup(PeerNode),
-          teleport_lb:connected(Name, {Transport, Sock}),
-          loop(State#{ peer_node => PeerNode });
-        {connection_rejected, Reason} ->
-          lager:error("teleport: connection rejected", [Reason]),
-          handle_conn_closed(State, {connection_rejected, Reason}),
-          exit(normal);
-        heartbeat ->
-          loop(State#{missed_heartbeats => 0});
-        OtherMsg ->
-          lager:info("teleport: got unknown message ~p~n", [OtherMsg]),
-          wait_handshake(State)
-      catch
-        error:badarg ->
-          lager:info(
-            "teleport: client for ~p error during handshake to bad data : ~w",
-            [Name, Data]
-          ),
-          _ = cleanup(State),
-          exit(normal)
-      end;
-    heartbeat ->
-      handle_heartbeat(State, fun wait_handshake/1);
-    {Closed, Sock} ->
-      handle_conn_closed(State, {error, Closed}),
-      exit(normal);
-    {Error, Sock, Reason} ->
-      handle_conn_closed(State, {error, {Error, Reason}}),
-      exit(normal);
-    {'EXIT', Parent, Reason} ->
-      handle_conn_closed(State, {error, Reason}),
-      exit(Reason);
-    {system, From, Request} ->
-      sys:handle_system_msg(Request, From, Parent, ?MODULE, [],
-        {wait_handshake, State})
-  end.
+      _ = cleanup(Data),
+      {stop, normal, Data}
+  end;
+wait_handshake(EventType, EventContent, Data) ->
+  handle_event(EventType, wait_handshake, EventContent,Data).
 
 
-loop(State = #{parent := Parent, transport := Transport, sock := Sock}) ->
-  Transport:setopts(Sock, [{packet, 4}, {active, once}]),
-  {OK, Closed, Error} = Transport:messages(),
-  receive
-    {OK, Sock, Data} ->
-      handle_data(Data, State);
-    {Closed, Sock} ->
-      handle_conn_closed(State, {error, Closed}),
-      exit(normal);
-    {Error, Sock, Reason} ->
-      handle_conn_closed(State, {error, {Error, Reason}}),
-      exit(normal);
-    {system, From, Request} ->
-      sys:handle_system_msg(Request, From, Parent, ?MODULE, [],
-        {loop, State});
-    heartbeat ->
-      handle_heartbeat(State, fun loop/1);
-    {'EXIT', Parent, Reason} ->
-      handle_conn_closed(State, {error, Reason}),
-      exit(Reason);
-    Any ->
-      lager:info("teleport:client got unknown message: ~p", [Any]),
-      loop(State)
-  end.
-
-handle_data(Data, State) ->
-  try erlang:binary_to_term(Data) of
+wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
+  try erlang:binary_to_term(PayLoad) of
     {call_result, Headers, Result} ->
       #{ pid := Pid} = Headers,
       _ = (catch Pid ! {call_result, Headers, Result}),
-      loop(State);
+      {keep_state, activate_socket(Data)};
     {sbcast_success, Headers = #{ pid := Pid}} ->
       _ = (catch Pid ! {sbcast_success, Headers}),
-      loop(State);
+      {keep_state, activate_socket(Data)};
     {sbcast_failed, Headers = #{ pid := Pid}} ->
       _ = (catch Pid ! {sbcast_failed, Headers}),
-      loop(State);
+      {keep_state, activate_socket(Data)};
     heartbeat ->
-      loop(State#{missed_heartbeats => 0});
+      {keep_state, activate_socket(Data#{missed_heartbeats => 0})};
     _Else ->
-      loop(State)
+      {keep_state, activate_socket(Data)}
   catch
-      error:badarg ->
-        #{ db := Db, host := Host, port:= Port} = State,
-        lager:info(
-          "teleport: ~p, tcp error with ~p:~p : ~w",
-          [Db, Host, Port, Data]
-        ),
-        exit(normal)
-  end.
+    error:badarg ->
+      #{ db := Db, host := Host, port:= Port} = Data,
+      lager:info(
+        "teleport: ~p, tcp error with ~p:~p : ~w",
+        [Db, Host, Port, Data]
+      ),
+    _ = cleanup(Data),
+    {stop, normal, Data}
+  end;
+wait_for_data(EventType, EventContent, Data) ->
+  handle_event(EventType, wait_for_data, EventContent ,Data).
 
-
-handle_heartbeat(State, Fun) ->
-  #{ transport := Transport, sock := Sock, missed_heartbeats := M} = State,
+handle_event(info, _State, heartbeat, Data) ->
+  #{transport := Transport,
+    sock := Sock,
+    missed_heartbeats := M,
+    peer_node := PeerNode} = Data,
   Packet = term_to_binary(heartbeat),
   ok = Transport:send(Sock, Packet),
   M2 = M + 1,
   if
     M2 > 3 ->
-      #{ host := Host, port:= Port} = State,
-      lager:info(
-        "teleport: client missed ~p heartbeats from ~p:~p. Closing connection",
-        [M2, Host, Port]
-      ),
-      Fun(cleanup(State));
+      lager:info("Missed ~p heartbeats from ~p. Closing connection~n", [M2, PeerNode]),
+      _ = cleanup(Data),
+      {stop, normal, Data};
     true ->
-      Fun(State#{missed_heartbeats => M2})
+      {keep_state, activate_socket(Data#{missed_heartbeats => M2})}
+  end;
+handle_event(Event, EventType, State, Data = #{ transport := Transport, sock := Sock }) ->
+  {_OK, Closed, Error} = Transport:messages(),
+  case EventType of
+    {Closed, Sock} ->
+      Data2 = handle_conn_closed(Closed, State, Data),
+      {stop, normal, Data2};
+    {Error, Sock, Reason} ->
+      Data2 = handle_conn_closed({Error, Reason}, State, Data),
+      {stop, normal, Data2};
+    _ ->
+      lager:error(
+        "teleport: server [~p] received an unknown event: ~p ~p",
+        [State, Event, EventType]
+      ),
+      {stop, normal, cleanup(Data)}
   end.
 
-handle_conn_closed(State = #{name := Name, peer_node := PeerNode}, Error) ->
+handle_conn_closed(Error, State, Data = #{name := Name, peer_node := PeerNode}) ->
   lager:info(
-    "teleport: lost client connection  from ~p[~p]. Reason: ~p~n",
-    [Name, PeerNode, Error]
+    "teleport:lost client connection in ~p from ~p[~p]. Reason: ~p~n",
+    [State, Name, PeerNode, Error]
   ),
-  _ = cleanup(State).
+  cleanup(Data).
 
 
-system_continue(_, _, {retry_loop, State, Retry}) ->
-  retry_loop(State, Retry);
-system_continue(_, _, {wait_handshake, State}) ->
-  wait_handshake(State);
-system_continue(_, _, {loop, State}) ->
-  loop(State).
-
--spec system_terminate(any(), _, _, _) -> no_return().
-system_terminate(_Reason, _, _, {_, State, _}) ->
-  _ = cleanup(State),
-  ok;
-system_terminate(_Reason, _, _, {_, State}) ->
-  lager:info("terminate with reason ~p~n", [_Reason]),
-  _ = cleanup(State),
-  ok.
-
-system_code_change(Misc, _, _, _) ->
-  {ok, Misc}.
-
+send_handshake(State = #{ name := Name}) ->
+  Cookie = erlang:get_cookie(),
+  Packet = erlang:term_to_binary({connect, Cookie, Name}),
+  send(Packet, State).
 
 send(Msg,  #{transport := Transport, sock := Sock}) ->
   Res = Transport:send(Sock, Msg),
   Res.
 
-cleanup(State) ->
+cleanup(Data) ->
   #{heartbeat := Heartbeat,
     name := Name,
     sock := Sock,
     transport := Transport,
-    peer_node := PeerNode} = State,
+    peer_node := PeerNode} = Data,
 
   if
     PeerNode =/= undefined -> teleport_monitor:nodedown(PeerNode);
@@ -401,7 +350,7 @@ cleanup(State) ->
   catch Transport:close(Sock),
   catch timer:cancel(Heartbeat),
 
-  State#{
+  Data#{
     heartbeat => undefined,
     sock => undefined,
     missed_heartbeats => 0
@@ -424,3 +373,7 @@ rand_increment(N, Max) ->
     true ->
       rand_increment(N)
   end.
+
+activate_socket(Data = #{ transport := Transport, sock := Sock}) ->
+  ok = Transport:setopts(Sock, [{active, once}, {packet, 4}]),
+  Data.
