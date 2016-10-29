@@ -9,7 +9,7 @@
 -module(teleport_client).
 -behaviour(gen_statem).
 
-
+%% API
 -export([
   start_link/2,
   call/5,
@@ -28,17 +28,14 @@
   callback_mode/0
 ]).
 
+%% states
 -export([
   connect/3,
   wait_handshake/3,
   wait_for_data/3
 ]).
 
-
 -include("teleport.hrl").
-
--record(retry, {n, delay, max}).
-
 
 call(Name, Mod, Fun, Args, Timeout) ->
   case do_call(Name, call, Mod, Fun, Args) of
@@ -302,11 +299,9 @@ handle_event(Event, EventType, State, Data = #{ transport := Transport, sock := 
   {_OK, Closed, Error} = Transport:messages(),
   case EventType of
     {Closed, Sock} ->
-      Data2 = handle_conn_closed(Closed, State, Data),
-      {stop, normal, Data2};
+      handle_conn_closed(Closed, State, Data);
     {Error, Sock, Reason} ->
-      Data2 = handle_conn_closed({Error, Reason}, State, Data),
-      {stop, normal, Data2};
+      handle_conn_closed({Error, Reason}, State, Data);
     _ ->
       lager:error(
         "teleport: server [~p] received an unknown event: ~p ~p",
@@ -320,7 +315,7 @@ handle_conn_closed(Error, State, Data = #{name := Name, peer_node := PeerNode}) 
     "teleport:lost client connection in ~p from ~p[~p]. Reason: ~p~n",
     [State, Name, PeerNode, Error]
   ),
-  cleanup(Data).
+  {stop, normal, cleanup(Data)}.
 
 
 send_handshake(State = #{ name := Name}) ->

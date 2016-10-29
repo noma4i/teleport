@@ -146,11 +146,9 @@ handle_event(Event, State, EventType, Data) ->
   {_OK, Closed, Error} = Transport:messages(),
   case EventType of
     {Closed, Sock} ->
-      Data2 = handle_conn_closed(Closed, State, Data),
-      {stop, normal, Data2};
+      handle_conn_closed(Closed, State, Data);
     {Error, Sock, Reason} ->
-      Data2 = handle_conn_closed({Error, Reason}, State, Data),
-      {stop, normal, Data2};
+      handle_conn_closed({Error, Reason}, State, Data);
     _ ->
       lager:error(
         "teleport: server [~p] received an unknown event: ~p ~p",
@@ -161,7 +159,7 @@ handle_event(Event, State, EventType, Data) ->
 
 handle_conn_closed(Error, State, Data = #{ peer_host := Host}) ->
   lager:info("teleport:connection from ~p closed (~p). Reason: ~p~n", [Host, State, Error]),
-  cleanup(Data).
+  {stop, normal, cleanup(Data)}.
 
 worker(Mod, Fun, Args) -> apply(Mod, Fun, Args).
 
@@ -174,7 +172,6 @@ worker(Headers, ProcName, Msg, Data) ->
           end,
   Packet = term_to_binary(Reply),
   ok = send(Data, Packet).
-  
 
 worker(Headers, Mod, Fun, Args, Data) ->
   Result = (catch apply(Mod , Fun, Args)),
@@ -185,7 +182,6 @@ worker(Headers, Mod, Fun, Args, Data) ->
 activate_socket(Data = #{ transport := Transport, sock := Sock}) ->
   ok = Transport:setopts(Sock, [{active, once}, {packet, 4}]),
   Data.
-
 
 send_handshake(Data) ->
   Packet = erlang:term_to_binary({connected, node()}),
