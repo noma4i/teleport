@@ -13,6 +13,7 @@
 -export([
   start_server/2,
   stop_server/1,
+  server_uri/1,
   connect/1,
   connect/2,
   disconnect/1,
@@ -41,10 +42,16 @@ start_server(Name, Config) ->
 stop_server(Name) ->
   teleport_server_sup:stop_server(Name).
 
+server_uri(Name) ->
+  teleport_server_sup:get_uri(Name).
+
 
 connect(Name) when is_atom(Name) ->
   [_, Host] = string:tokens(atom_to_list(Name), "@"),
-  connect(Name, #{host => Host, port => ?DEFAULT_PORT}).
+  connect(Name, #{host => Host, port => ?DEFAULT_PORT});
+connect(Uri) when is_list(Uri) ->
+  #{ name := Name } = Config = teleport_uri:parse(Uri),
+  teleport_conns_sup:connect(Name, Config).
 
 connect(Name, Config) ->
   teleport_conns_sup:connect(Name, Config).

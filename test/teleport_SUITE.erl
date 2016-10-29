@@ -44,9 +44,9 @@ end_per_suite(Config) ->
 
 basic(_Config) ->
   {ok, RemoteNode} = start_slave(remote_teleport),
-  ok = start_remote_server(RemoteNode),
+  {ok, Port} = start_remote_server(RemoteNode),
 
-  true = teleport:connect(test, #{}),
+  true = teleport:connect(test, #{port => Port}),
 
   3 = teleport:call(test, test_module, add, [1,2]),
 
@@ -59,8 +59,8 @@ basic(_Config) ->
 %% =============================================================================
 
 start_remote_server(HostNode) ->
-  ok_from_slave = rpc:call(HostNode, ?MODULE, run_on_slave_start_teleport, []),
-  ok.
+  {ok_from_slave, Port} = rpc:call(HostNode, ?MODULE, run_on_slave_start_teleport, []),
+  {ok, Port}.
 
 stop_remote_server(HostNode) ->
   ok_from_slave = rpc:call(HostNode, ?MODULE, run_on_slave_stop_teleport, []),
@@ -68,8 +68,10 @@ stop_remote_server(HostNode) ->
 
 run_on_slave_start_teleport() ->
   {ok, _Pid} = teleport:start_server(test, []),
-  ct:log("[~p][~p] teleport server started", [node(), ?MODULE]),
-  ok_from_slave.
+  Port = teleport_server_sup:get_port(test),
+
+  ct:log("[~p][~p] teleport server started on ~p", [node(), ?MODULE, Port]),
+  {ok_from_slave, Port}.
 
 run_on_slave_stop_teleport() ->
   ok = teleport:stop_server(test),

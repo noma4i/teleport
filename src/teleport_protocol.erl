@@ -32,16 +32,15 @@ start_link(Ref, Socket, Transport, Opts) ->
   proc_lib:start_link(?MODULE, init, [{self(), Ref, Socket, Transport, Opts}]).
 
 
-init({Parent, Ref, Socket, Transport, _Opts}) ->
+init({Parent, Ref, Socket, Transport, Opts}) ->
   proc_lib:init_ack(Parent, {ok, self()}),
   ok = ranch:accept_ack(Ref),
-
   ok = Transport:setopts(Socket, [{active, once}, binary,  {packet, 4}]),
   {ok, Heartbeat} = timer:send_interval(5000, self(), heartbeat),
   {ok, {PeerHost, PeerPort}} = Transport:peername(Socket),
   ets:insert(teleport_incoming_conns, {self(), PeerHost, undefined}),
   {OK, _Closed, _Error} = Transport:messages(),
-
+  #{ host := Host, transport := Transport, name := Name} = Opts,
   Data =
     #{
       transport => Transport,
@@ -50,7 +49,10 @@ init({Parent, Ref, Socket, Transport, _Opts}) ->
       missed_heartbeats => 0,
       peer_host => PeerHost,
       peer_port => PeerPort,
-      ok => OK
+      ok => OK,
+      name => Name,
+      host => Host,
+      transport_uri => Transport
     },
   gen_statem:enter_loop(?MODULE, [], wait_for_handshake,  activate_socket(Data)).
 
@@ -181,9 +183,16 @@ activate_socket(Data = #{ transport := Transport, sock := Sock}) ->
   ok = Transport:setopts(Sock, [{active, once}, {packet, 4}]),
   Data.
 
-send_handshake(Data) ->
-  Packet = erlang:term_to_binary({connected, node()}),
-  send(Data, Packet).
+send_handshake(#{name := Name, host := Host, transport := T, sock := S}) ->
+  {ok, {_, Port}} = T:sockname(S),
+  Node = binary_to_atom(
+    iolist_to_binary(
+      [teleport_lib:to_list(Name), "@", Host, ":", integer_to_list(Port)]
+    ),
+    latin1
+  ),
+  Packet = erlang:term_to_binary({connected, Node}),
+  T:send(S, Packet).
 
 send(#{ transport := Transport, sock := Sock}, Packet) ->
   Transport:send(Sock, Packet).

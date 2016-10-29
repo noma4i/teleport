@@ -32,7 +32,7 @@
   code_change/3
 ]).
 
--record(teleport_lb, {name, num_conns = 0, conns = []}).
+-record(teleport_lb, {name, num_conns = 0, conns = [], waiting = []}).
 
 start_link(Name) ->
   gen_server:start_link({local, Name}, ?MODULE, [Name], []).

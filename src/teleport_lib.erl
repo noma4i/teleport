@@ -9,17 +9,15 @@
 -module(teleport_lib).
 
 -export([
-  get_transport/1,
   ssl_conf/2,
-  sync_kill/1
+  sync_kill/1,
+  to_atom/1,
+  to_list/1
 ]).
 
 -include("teleport.hrl").
 -include_lib("public_key/include/OTP-PUB-KEY.hrl").
 
-get_transport(tcp) -> ranch_tcp;
-get_transport(ssl) -> ranch_ssl;
-get_transport(Mod) -> Mod.
 
 -spec ssl_conf(client | server, inet:hostname() | inet:ip_address()) -> proplists:proplists().
 ssl_conf(client, Host) ->
@@ -102,3 +100,24 @@ sync_kill(Pid) ->
   after
     erlang:demonitor(MRef, [flush])
   end.
+
+-spec to_atom(term()) -> atom().
+to_atom(V) when is_atom(V) -> V;
+to_atom(V) when is_list(V) ->
+  case catch list_to_existing_atom(V) of
+    {'EXIT', _} -> list_to_atom(V);
+    A -> A
+  end;
+to_atom(V) when is_binary(V) ->
+  case catch binary_to_existing_atom(V, utf8) of
+    {'EXIT', _} -> binary_to_atom(V, utf8);
+    B -> B
+  end;
+to_atom(_) -> error(badarg).
+
+
+to_list(V) when is_list(V) -> V;
+to_list(V) when is_binary(V) -> binary_to_list(V);
+to_list(V) when is_atom(V) -> atom_to_list(V);
+to_list(V) when is_list(V) -> integer_to_list(V);
+to_list(_) -> error(badarg).

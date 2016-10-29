@@ -153,7 +153,7 @@ init([Name, Config]) ->
   Host = maps:get(host, Config, "localhost"),
   Port = maps:get(port, Config, ?DEFAULT_PORT),
   Retries = maps:get(retry, Config, 3),
-  Transport = maps:get(transport, Config, ranch_tcp),
+  Transport = teleport_uri:parse_transport(Config),
   {OK, _Closed, _Error} = Transport:messages(),
   Data =
     #{
