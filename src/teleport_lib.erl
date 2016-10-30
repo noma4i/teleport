@@ -38,7 +38,7 @@ ssl_conf(client, Host) ->
               end,
   merge_opts(ExtraOpts, DefaultOpts);
 ssl_conf(server, Host) ->
-  TrustStore = application:get_env(teleport, client_ssl_store, []),
+  TrustStore = application:get_env(teleport, server_ssl_store, []),
   ExtraOpts = proplists:get_value(Host, TrustStore, []),
   DefaultOpts = lists:append(?SSL_DEFAULT_COMMON_OPTS, ?SSL_DEFAULT_SERVER_OPTS),
   merge_opts(ExtraOpts, DefaultOpts).

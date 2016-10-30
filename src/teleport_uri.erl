@@ -117,4 +117,3 @@ get_transport(Mod) -> Mod.
 to_transport(ranch_tcp) -> tcp;
 to_transport(ranch_ssl) -> ssl;
 to_transport(Mod) -> Mod.
-

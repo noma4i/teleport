@@ -41,6 +41,7 @@ init([Name, Config]) ->
 %%%===================================================================
 
 client_specs(Name, Config) ->
+  HostName = inet:gethostname(),
   Configs = case is_map(Config) of
               true -> [Config];
               false when is_list(Config) ->
@@ -55,7 +56,7 @@ client_specs(Name, Config) ->
   ClientSpecs = lists:map(
     fun(Conf) ->
       NumClients = maps:get(num_connections, Conf, 1),
-      Host = maps:get(host, Conf, "localhost"),
+      Host = maps:get(host, Conf, HostName),
       Port = maps:get(port, Conf, ?DEFAULT_PORT),
       lists:map(
         fun(I) ->

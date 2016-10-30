@@ -37,50 +37,92 @@
 
 -include("teleport.hrl").
 
+-type host() :: inet:socket_address() | inet:hostname().
+-type uri() :: string().
+
+-type connect_options() :: #{
+  num_connections => non_neg_integer(),
+  connect_timeout => non_neg_integer()
+}.
+
+-type client_config() :: #{
+  host := host(),
+  port => inet:port_number(),
+  num_connections => non_neg_integer(),
+  connect_timeout => non_neg_integer()
+}.
+
+-type server_config() :: #{
+  host :=  host(),
+  port => inet:port_number(), %% default is 0
+  transport => tcp | ssl,
+  num_acceptors => non_neg_integer()
+}.
+
+%% @doc start a server that will handle a route
+-spec start_server(atom(), server_config()) -> {ok, pid()} |{error, term()}.
 start_server(Name, Config) ->
   teleport_server_sup:start_server(Name, Config).
 
+%% @doc stop a server
+-spec stop_server(atom()) -> ok.
 stop_server(Name) ->
   teleport_server_sup:stop_server(Name).
 
+%% @doc get the server uri that can be used to connect from a client
+-spec server_uri(atom()) -> uri().
 server_uri(Name) ->
   teleport_server_sup:get_uri(Name).
 
-
-connect(Name) when is_atom(Name) ->
-  [_, Host] = string:tokens(atom_to_list(Name), "@"),
-  connect(Name, #{host => Host, port => ?DEFAULT_PORT});
+%% @doc connect to a server using an uri
+-spec connect(Uri::uri()) -> boolean().
 connect(Uri) when is_list(Uri) ->
   #{ name := Name } = Config = teleport_uri:parse(Uri),
   teleport_conns_sup:connect(Name, Config).
 
-connect(Name, Config) ->
+%% @doc connect to a server
+-spec connect(atom(), [client_config()] | client_config()) -> boolean()
+        ; (uri(), connect_options()) -> boolean().
+connect(Name, Configs) when is_atom(Name) ->
+  teleport_conns_sup:connect(Name, Configs);
+connect(Uri, Options) when is_list(Uri) ->
+  #{name := Name } = HostConfig = teleport_uri:parse(Uri),
+  Config = maps:merge(HostConfig, Options),
   teleport_conns_sup:connect(Name, Config).
 
+%% @doc disconnect from a server
+-spec disconnect(atom()) -> ok.
 disconnect(Name) ->
   teleport_conns_sup:disconnect(Name).
 
+%% @doc on a server node list incoming connections
 incoming_conns() ->
   lists:usort(
     [Node || {_, _, Node} <- ets:tab2list(teleport_incoming_conns)]).
 
+%% @doc on a client node list outgoing connections
 outgoing_conns() ->
   lists:usort(
     [Node || {_, _, Node} <- ets:tab2list(teleport_outgoing_conns)]).
 
+%% @doc wait for a connection to be up
 await_connection(Name, Timeout) ->
   teleport_lb:await_connection(Name, Timeout).
 
 
 %% MONITOR API
 
+%% @doc monitor all nodes
+-spec monitor_nodes(boolean()) -> ok.
 monitor_nodes(true) -> teleport_monitor:monitor_node('$all_nodes');
 monitor_nodes(false) -> teleport_monitor:demonitor_node('$all_nodes').
 
+%% @doc monitor all connections
+-spec monitor_conns(boolean()) -> ok.
 monitor_conns(true) -> teleport_monitor:monitor_conn('$all_conns');
 monitor_conns(false) -> teleport_monitor:demonitor_conn('$all_conns').
 
-
+%% @doc monitor a node name
 monitor_node(Name) -> teleport_monitor:monitor_node(Name).
 
 demonitor_node(Name) -> teleport_monitor:demonitor_node(Name).
