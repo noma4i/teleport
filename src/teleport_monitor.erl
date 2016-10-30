@@ -73,8 +73,6 @@ connup(Name) -> call({connup, Name}).
 conndown(Name) -> call({conndown, Name}).
 
 
-
-
 start_link() ->
   IsNew = create_table(),
   gen_server:start_link({local, ?MODULE}, ?MODULE, [IsNew], []) .

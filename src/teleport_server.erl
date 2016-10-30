@@ -50,7 +50,7 @@ init([Name, Config]) ->
 
   {ok, Listener} = ranch:start_listener(
     Name, NumAcceptors, Transport, TransportOpts,
-    teleport_protocol,#{ host => Host, transport => Transport, name => Name}
+    teleport_protocol, #{ host => Host, transport => Transport, name => Name}
   ),
 
   %% link the listener supervisor so we can catch exists

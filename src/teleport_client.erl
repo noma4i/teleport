@@ -37,6 +37,8 @@
 
 -include("teleport.hrl").
 
+-define(TIMEOUT, 5000).
+
 call(Name, Mod, Fun, Args, Timeout) ->
   case do_call(Name, call, Mod, Fun, Args) of
     {ok, Headers} -> wait_reply(Headers, Timeout);
@@ -165,7 +167,7 @@ init([Name, Config]) ->
       missed_heartbeats => 0,
       conf => Config,
       peer_node => undefined,
-      retry => {Retries, 200, teleport_conns_sup:connecttime()},
+      retry => {Retries, 200, ?TIMEOUT},
       ok => OK
     },
   {ok, connect, Data}.

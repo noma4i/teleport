@@ -17,7 +17,6 @@
 
 %% internal
 -export([
-  passive_monitor/2,
   connecttime/0
 ]).
 
@@ -40,15 +39,15 @@ start_link() ->
 
 connect(Name, Config) ->
   Spec = conn_spec(Name, Config),
-  Pid = spawn(?MODULE, passive_monitor, [self(), Name]),
   %% start the load balancer
   case supervisor:start_child(?MODULE, Spec) of
-    {error, already_present} -> kill_passive_monitor(Pid), true;
-    {error, {already_started, _Pid}} -> kill_passive_monitor(Pid), true;
-    {ok, _Pid} ->
-      receive
-        {Pid, true} -> true;
-        {Pid, false} -> false
+    {ok, _Pid} -> teleport_lb:await_connection(Name, connecttime());
+    {error, {already_started, Pid}} ->
+      case teleport_lb:get_config(Pid) of
+        Config ->
+          teleport_lb:await_connection(Name, connecttime());
+        _ ->
+          {error, invalid_configuration}
       end
   end.
 
@@ -69,32 +68,6 @@ connecttime() ->
       ?SETUPTIME
   end.
 
-passive_monitor(Parent, Name) ->
-  ok = teleport_monitor:monitor_conn(Name),
-  Ref = make_ref(),
-  Tref = erlang:send_after(connecttime(),self(),Ref),
-  receive
-    Ref ->
-      teleport_monitor:demonitor_conn(Name),
-      Parent ! {self(), false};
-    {connup, Name} ->
-      teleport_monitor:demonitor_conn(Name),
-      _ = erlang:cancel_timer(Tref),
-      Parent ! {self(), true}
-  end.
-
-kill_passive_monitor(Pid) ->
-  MRef = erlang:monitor(process, Pid),
-  try
-    catch exit(Pid, kill),
-    receive
-      {'DOWN', MRef, _, _, _} ->
-        ok
-    end
-  after
-    erlang:demonitor(MRef, [flush])
-  end.
-  
 
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->

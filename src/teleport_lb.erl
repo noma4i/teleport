@@ -11,13 +11,15 @@
 
 %% API
 -export([
-  start_link/1,
+  start_link/2,
   connected/2,
   disconnected/1,
   is_connection_up/1,
   conn_status/0,
   get_conn_pid/1,
-  get_conn_pid/2
+  get_conn_pid/2,
+  await_connection/2,
+  get_config/1
 ]).
 
 
@@ -32,10 +34,15 @@
   code_change/3
 ]).
 
--record(teleport_lb, {name, num_conns = 0, conns = [], waiting = []}).
+-record(teleport_lb, {
+  name,
+  num_conns = 0,
+  conns = [],
+  waiting = []
+}).
 
-start_link(Name) ->
-  gen_server:start_link({local, Name}, ?MODULE, [Name], []).
+start_link(Name, Config) ->
+  gen_server:start_link({local, Name}, ?MODULE, [Name, Config], []).
 
 
 connected(Name, Conn) ->
@@ -48,6 +55,16 @@ is_connection_up(Name) ->
   case ets:lookup(teleport_lb, Name) of
     [#teleport_lb{num_conns = N}] when N > 0 -> true;
     _ -> false
+  end.
+
+await_connection(Name, Timeout) ->
+  case is_connection_up(Name) of
+    true -> true;
+    false ->
+      case catch gen_server:call(Name, await, Timeout) of
+        true -> true;
+        _ -> false
+      end
   end.
 
 conn_status() ->
@@ -78,6 +95,9 @@ generate_rand_int(Range) ->
 generate_rand_int(Range, Int) ->
   (Int rem Range) + 1.
 
+
+get_config(Name) -> safe_call(Name, get_config).
+
 safe_call(Name, Args) ->
   case catch gen_server:call(Name, Args) of
     {'EXIT', {noproc, _}} ->
@@ -89,17 +109,19 @@ safe_call(Name, Args) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Name]) ->
+init([Name, Config]) ->
   true = ets:insert(teleport_lb, #teleport_lb{name = Name}),
   {ok,
     #{name => Name,
+      config => Config,
       workers => queue:new()}}.
 
 
 handle_call({connected, Client}, _From, State = #{ name := Name, workers := Workers}) ->
   Conn2 = case ets:lookup(teleport_lb, Name) of
             [] -> #teleport_lb{name=Name, num_conns=1, conns=[Client]};
-            [Conn = #teleport_lb{num_conns=N, conns=Conns}] ->
+            [Conn = #teleport_lb{num_conns=N, conns=Conns, waiting=Waiting}] ->
+              reply_waiting(lists:reverse(Waiting), true),
               Conn#teleport_lb{num_conns = N+1, conns = Conns ++ [Client]}
           end,
   true = ets:insert(teleport_lb, Conn2),
@@ -110,17 +132,11 @@ handle_call({disconnected, Pid}, _From, State = #{ name := Name}) ->
   case ets:lookup(teleport_lb, Name) of
     [] ->  ok;
     [Conn = #teleport_lb{num_conns = N, conns=Conns}] ->
-      case lists:filter(
-          fun({X_pid, _}) ->
-            not (X_pid =:= Pid) end,
-          Conns) of
-        Conns ->
-          ok;
-        [] ->
-          ets:delete(teleport_lb, Name);
-        Conns1 ->
-          ets:insert(teleport_lb, Conn#teleport_lb{num_conns = N - 1, conns = Conns1})
-      end
+      Conns1 = lists:filter(
+        fun({X_pid, _}) ->
+          not (X_pid =:= Pid)
+        end, Conns),
+       ets:insert(teleport_lb, Conn#teleport_lb{num_conns = N - 1, conns = Conns1})
   end,
   teleport_monitor:conndown(Name),
   {reply, ok, State};
@@ -132,6 +148,23 @@ handle_call(get_conn_pid, _From, State = #{workers := Workers}) ->
       {reply, {ok, Client}, State#{workers => queue:in(Client, Workers1)}}
   end;
 
+%% TODO: maybe we should start the client supervisor in the lb
+%% so we can catch directly when it exit?
+handle_call(await, From, State = #{ name := Name}) ->
+  case ets:lookup(teleport_lb, Name) of
+    [] ->
+      ets:insert(teleport_lb, #teleport_lb{name=Name, waiting=[From]}),
+      {noreply, State};
+    [#teleport_lb{num_conns = N}] when N > 0 ->
+      {reply, true, State};
+    [Conn = #teleport_lb{waiting=Waiting}] ->
+      ets:insert(teleport_lb, Conn#teleport_lb{waiting=[From|Waiting]}),
+      {noreply, State}
+  end;
+
+handle_call(get_config, _From, State = #{ config := Config}) ->
+  {reply, Config, State};
+
 handle_call(_Request, _From, State) ->
   Reply = ok,
   {reply, Reply, State}.
@@ -142,8 +175,16 @@ handle_cast(_Msg, State) ->
 handle_info(_Info, State) ->
   {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, #{ name := Name}) ->
+  ets:delete(teleport_lb, Name),
   ok.
 
 code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
+
+
+reply_waiting([From|W], Rep) ->
+  gen_server:reply(From, Rep),
+  reply_waiting(W, Rep);
+reply_waiting([], _) ->
+  ok.

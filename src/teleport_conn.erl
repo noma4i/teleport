@@ -22,7 +22,7 @@ start_link(Sup, Name, Config) ->
 init([Name, Config]) ->
   LbSpec =
     #{id => {'teleport_lb', Name},
-      start => {teleport_lb, start_link, [Name]},
+      start => {teleport_lb, start_link, [Name, Config]},
       restart => permanent,
       shutdown => 2000,
       type => worker,

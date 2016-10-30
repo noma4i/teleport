@@ -31,7 +31,8 @@
   monitor_conn/1,
   demonitor_conn/1,
   monitor_nodes/1,
-  monitor_conns/1
+  monitor_conns/1,
+  await_connection/2
 ]).
 
 -include("teleport.hrl").
@@ -66,6 +67,9 @@ incoming_conns() ->
 outgoing_conns() ->
   lists:usort(
     [Node || {_, _, Node} <- ets:tab2list(teleport_outgoing_conns)]).
+
+await_connection(Name, Timeout) ->
+  teleport_lb:await_connection(Name, Timeout).
 
 
 %% MONITOR API
