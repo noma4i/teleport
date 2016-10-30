@@ -43,7 +43,7 @@ connect(Name, Config) ->
   case supervisor:start_child(?MODULE, Spec) of
     {ok, _Pid} -> teleport_lb:await_connection(Name, connecttime());
     {error, {already_started, Pid}} ->
-      case teleport_lb:get_config(Pid) of
+      case teleport_lb:get_config(Name) of
         Config ->
           teleport_lb:await_connection(Name, connecttime());
         _ ->

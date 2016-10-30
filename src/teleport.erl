@@ -59,6 +59,14 @@
   num_acceptors => non_neg_integer()
 }.
 
+-export_types([
+  host/0,
+  uri/0,
+  connect_options/0,
+  client_config/0,
+  server_config/0
+]).
+
 %% @doc start a server that will handle a route
 -spec start_server(atom(), server_config()) -> {ok, pid()} |{error, term()}.
 start_server(Name, Config) ->
