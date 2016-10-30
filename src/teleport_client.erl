@@ -164,6 +164,7 @@ init([Name, Config]) ->
       port => Port,
       transport => Transport,
       sock => undefined,
+      heartbeat => undefined,
       missed_heartbeats => 0,
       conf => Config,
       peer_node => undefined,

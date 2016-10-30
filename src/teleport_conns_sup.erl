@@ -53,9 +53,12 @@ connect(Name, Config) ->
 
 disconnect(Name) ->
   Sup = conn_sup_name(Name),
-  _ = supervisor:terminate_child(?MODULE, Sup),
-  _ = supervisor:delete_child(?MODULE, Sup),
-  ok.
+  case supervisor:terminate_child(?MODULE, Sup) of
+    ok ->
+      _ = supervisor:delete_child(?MODULE, Sup);
+    {error, Reason} ->
+      {error, Reason}
+  end.
 
 
 connecttime() ->

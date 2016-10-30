@@ -33,7 +33,7 @@ start_link(Name, Config) ->
   {ok, {supervisor:sup_flags(), [supervisor:child_spec()]}}.
 init([Name, Config]) ->
   Specs = client_specs(Name, Config),
-  {ok, {{one_for_one, 5, 60}, Specs}}.
+  {ok, {{one_for_one, 1, 5}, Specs}}.
 
 
 %%%===================================================================
