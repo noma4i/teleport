@@ -15,15 +15,21 @@
   stop_server/1,
   server_uri/1,
   connect/1,
-  connect/2,
   disconnect/1,
+  start_pool/2,
+  stop_pool/1,
+  start_group/2, start_pool/3,
+  stop_group/1,
   incoming_conns/0,
   outgoing_conns/0,
   call/4,
   call/5,
+  call/6,
   cast/4,
+  cast/5,
   blocking_call/4,
   blocking_call/5,
+  blocking_call/6,
   abcast/3,
   sbcast/3,
   monitor_node/1,
@@ -35,21 +41,22 @@
   await_connection/2
 ]).
 
+-export([default_strategy/0]).
+
 -include("teleport.hrl").
+
+-define(DEFAULT_STRATEGY, random).
 
 -type host() :: inet:socket_address() | inet:hostname().
 -type uri() :: string().
 
--type connect_options() :: #{
-  num_connections => non_neg_integer(),
-  connect_timeout => non_neg_integer()
-}.
-
--type client_config() :: #{
-  host := host(),
+-type pool_options() :: #{
+  host :=  host(),
   port => inet:port_number(),
   num_connections => non_neg_integer(),
-  connect_timeout => non_neg_integer()
+  connect_timeout => non_neg_integer(),
+  sup_intensity => non_neg_integer(),
+  sup_period => non_neg_integer()
 }.
 
 -type server_config() :: #{
@@ -86,22 +93,37 @@ server_uri(Name) ->
 -spec connect(Uri::uri()) -> boolean().
 connect(Uri) when is_list(Uri) ->
   #{ name := Name } = Config = teleport_uri:parse(Uri),
-  teleport_conns_sup:connect(Name, Config).
-
-%% @doc connect to a server
--spec connect(atom(), [client_config()] | client_config()) -> boolean()
-        ; (uri(), connect_options()) -> boolean().
-connect(Name, Configs) when is_atom(Name) ->
-  teleport_conns_sup:connect(Name, Configs);
-connect(Uri, Options) when is_list(Uri) ->
-  #{name := Name } = HostConfig = teleport_uri:parse(Uri),
-  Config = maps:merge(HostConfig, Options),
-  teleport_conns_sup:connect(Name, Config).
+  start_pool(Name, Config).
 
 %% @doc disconnect from a server
 -spec disconnect(atom()) -> ok.
 disconnect(Name) ->
   teleport_conns_sup:disconnect(Name).
+
+-spec start_pool(atom(), uri()) -> {ok, pid()} | {error, term()}.
+start_pool(Name, Uri) when is_list(Uri) ->
+  Config = teleport_uri:parse(Uri),
+  teleport_conns_sup:start_pool(Name, Config#{name => Name});
+start_pool(Name, Config) when is_atom(Name) ->
+  teleport_conns_sup:connect(Name, Config).
+
+start_pool(Name, Uri, Options) ->
+  Config = teleport_uri:parse(Uri),
+  teleport_conns_sup:start_pool(Name, maps:merge(Config, Options)).
+
+-spec stop_pool(atom()) -> ok.
+stop_pool(Name) ->
+  teleport_conns_sup:stop_pool(Name).
+
+-spec start_group(atom(), [uri() | pool_options()]) ->
+  {ok, pid()} | {error, term()}.
+start_group(Name, Group) ->
+  teleport_conns_sup:start_pool(Name, Group).
+
+-spec stop_group(atom()) -> ok.
+stop_group(Name) ->
+  teleport_conns_sup:stop_pool(Name).
+
 
 %% @doc on a server node list incoming connections
 incoming_conns() ->
@@ -142,18 +164,24 @@ demonitor_conn(Name) -> teleport_monitor:demonitor_conn(Name).
 
 %% RPC API
 
-call(Name, M, F, A) -> call(Name, M, F, A, 5000).
+call(Name, M, F, A) -> call(Name, M, F, A, default_strategy(), 5000).
 
-call(Name, M, F, A, Timeout) ->
-  teleport_client:call(Name, M, F, A, Timeout).
+call(Name, M, F, A, Strategy) -> call(Name, M, F, A, Strategy, 5000).
 
-cast(Name, M, F, A) ->
-  teleport_client:cast(Name, M, F, A).
+call(Name, M, F, A, Strategy, Timeout) ->
+  teleport_client:call(Name, M, F, A, Strategy, Timeout).
 
-blocking_call(Name, M, F, A) -> blocking_call(Name, M, F, A, 5000).
+cast(Name, M, F, A) -> cast(Name, M, F, A, default_strategy()).
 
-blocking_call(Name, M, F, A, Timeout) ->
-  teleport_client:blocking_call(Name, M, F, A, Timeout).
+cast(Name, M, F, A, Strategy) ->
+  teleport_client:cast(Name, M, F, A, Strategy).
+
+blocking_call(Name, M, F, A) -> blocking_call(Name, M, F, A, default_strategy(), 5000).
+
+blocking_call(Name, M, F, A, Strategy) -> blocking_call(Name, M, F, A, Strategy, 5000).
+
+blocking_call(Name, M, F, A, Strategy, Timeout) ->
+  teleport_client:blocking_call(Name, M, F, A, Strategy, Timeout).
 
 abcast(Names, ProcName, Msg) ->
   teleport_client:abcast(Names, ProcName, Msg).
@@ -165,3 +193,10 @@ sbcast(Names, ProcName, Msg) ->
 
 
 
+%% internal
+
+default_strategy() ->
+  case application:get_env(teleport, default_strategy) of
+    undefined -> random;
+    {ok, Strategy} -> Strategy
+  end.

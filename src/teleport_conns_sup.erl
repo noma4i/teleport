@@ -12,7 +12,9 @@
 -export([
   start_link/0,
   connect/2,
-  disconnect/1
+  disconnect/1,
+  start_pool/2,
+  stop_pool/1
 ]).
 
 %% internal
@@ -42,7 +44,7 @@ connect(Name, Config) ->
   %% start the load balancer
   case supervisor:start_child(?MODULE, Spec) of
     {ok, _Pid} -> teleport_lb:await_connection(Name, connecttime());
-    {error, {already_started, Pid}} ->
+    {error, {already_started, _Pid}} ->
       case teleport_lb:get_config(Name) of
         Config ->
           teleport_lb:await_connection(Name, connecttime());
@@ -52,6 +54,26 @@ connect(Name, Config) ->
   end.
 
 disconnect(Name) ->
+  stop_pool(Name).
+
+start_pool(Name, Config) ->
+  Spec = conn_spec(Name, Config),
+  %% start the load balancer
+  case supervisor:start_child(?MODULE, Spec) of
+    {ok, Pid} ->
+      true = teleport_lb:await_connection(Name, connecttime()),
+      {ok, Pid};
+    {error, {already_started, Pid}} ->
+      case teleport_lb:get_config(Name) of
+        Config ->
+          true = teleport_lb:await_connection(Name, connecttime()),
+          {ok, Pid};
+        _ ->
+          {error, invalid_configuration}
+      end
+  end.
+
+stop_pool(Name) ->
   Sup = conn_sup_name(Name),
   case supervisor:terminate_child(?MODULE, Sup) of
     ok ->

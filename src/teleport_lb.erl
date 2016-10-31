@@ -16,8 +16,9 @@
   disconnected/1,
   is_connection_up/1,
   conn_status/0,
-  get_conn_pid/1,
-  get_conn_pid/2,
+  random_conn/1,
+  hash_conn/2,
+  next_conn/1,
   await_connection/2,
   get_config/1
 ]).
@@ -36,8 +37,10 @@
 
 -record(teleport_lb, {
   name,
+  clients = 0,
   num_conns = 0,
   conns = [],
+  conns_by_id = #{},
   waiting = []
 }).
 
@@ -45,8 +48,8 @@ start_link(Name, Config) ->
   gen_server:start_link({local, Name}, ?MODULE, [Name, Config], []).
 
 
-connected(Name, Conn) ->
-  safe_call(Name, {connected, {self(), Conn}}).
+connected(Name, {Id, Conn}) ->
+  safe_call(Name, {connected, Id, {self(), Conn}}).
 
 disconnected(Name) ->
   safe_call(Name, {disconnected, self()}).
@@ -72,29 +75,34 @@ conn_status() ->
     {X_name, is_connection_up(X_name)}
             end, ets:tab2list(teleport_lb)).
 
-get_conn_pid(Name) -> get_conn_pid(Name, rand).
-
-get_conn_pid(Name, rand) ->
+random_conn(Name) ->
   case ets:lookup(teleport_lb, Name) of
     [#teleport_lb{conns = [Conn]}] ->
       {ok, Conn};
     [#teleport_lb{num_conns = N, conns = Conns}] when N > 0 ->
-      N2 = generate_rand_int(N),
+      N2 = rand:uniform(N),
       {ok, lists:nth(N2, Conns)};
     _ ->
       {badrpc, not_connected}
-  end;
-get_conn_pid(Name, lb) ->
-  gen_server:call(Name, get_connection_pid).
+  end.
 
-%% TODO: use the rand module?
-generate_rand_int(Range) ->
-  {_, _, Int} = erlang:timestamp(),
-  generate_rand_int(Range, Int).
+hash_conn(Name, HashKey) ->
+  case ets:lookup(teleport_lb, Name) of
+    [#teleport_lb{conns = [Conn]}] ->
+      {ok, Conn};
+    [#teleport_lb{clients=N, conns_by_id=ById}] ->
+      Index = 1 + erlang:phash2(HashKey, N),
+      ClientId = teleport_client:client_name(Name, Index),
+      case maps:find(ClientId, ById) of
+        {ok, Conn} -> {ok, Conn};
+        _error-> {badrpc, not_connected}
+      end;
+    _ ->
+      {badrpc, not_connected}
+  end.
 
-generate_rand_int(Range, Int) ->
-  (Int rem Range) + 1.
-
+next_conn(Name) ->
+  gen_server:call(Name, next).
 
 get_config(Name) -> safe_call(Name, get_config).
 
@@ -110,19 +118,33 @@ safe_call(Name, Args) ->
 %%%===================================================================
 
 init([Name, Config]) ->
-  true = ets:insert(teleport_lb, #teleport_lb{name = Name}),
+  N = case is_map(Config) of
+        true -> maps:get(num_connections, Config, 1);
+        false -> length(Config)
+      end,
+  true = ets:insert(teleport_lb, #teleport_lb{name = Name, clients=N}),
   {ok,
     #{name => Name,
       config => Config,
       workers => queue:new()}}.
 
 
-handle_call({connected, Client}, _From, State = #{ name := Name, workers := Workers}) ->
+handle_call({connected, Id, Client}, _From, State = #{ name := Name, workers := Workers}) ->
   Conn2 = case ets:lookup(teleport_lb, Name) of
-            [] -> #teleport_lb{name=Name, num_conns=1, conns=[Client]};
-            [Conn = #teleport_lb{num_conns=N, conns=Conns, waiting=Waiting}] ->
+            [] ->
+              #teleport_lb{
+                name=Name,
+                num_conns=1,
+                conns=[Client],
+                conns_by_id = #{ Id => Client}
+              };
+            [Conn = #teleport_lb{num_conns=N, conns=Conns, conns_by_id=ById, waiting=Waiting}] ->
               reply_waiting(lists:reverse(Waiting), true),
-              Conn#teleport_lb{num_conns = N+1, conns = Conns ++ [Client]}
+              Conn#teleport_lb{
+                num_conns = N+1,
+                conns = Conns ++ [Client],
+                conns_by_id = ById#{Id => Client}
+              }
           end,
   true = ets:insert(teleport_lb, Conn2),
   teleport_monitor:connup(Name),
@@ -141,7 +163,7 @@ handle_call({disconnected, Pid}, _From, State = #{ name := Name}) ->
   teleport_monitor:conndown(Name),
   {reply, ok, State};
 
-handle_call(get_conn_pid, _From, State = #{workers := Workers}) ->
+handle_call(next, _From, State = #{workers := Workers}) ->
   case queue:out(Workers) of
     {empty, _} -> {reply, not_connected, State};
     {{value, Client}, Workers1} ->

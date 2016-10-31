@@ -25,6 +25,7 @@
 -spec start_link(atom(), any()) -> {ok, pid()} | {error, term()}.
 start_link(Name, Config) ->
   supervisor:start_link({local, sup_name(Name) }, ?MODULE, [Name, Config]).
+
 %%%===================================================================
 %%% Supervisor callbacks
 %%%===================================================================
@@ -41,33 +42,41 @@ init([Name, Config]) ->
 %%%===================================================================
 
 client_specs(Name, Config) ->
-  HostName = inet:gethostname(),
-  Configs = case is_map(Config) of
-              true -> [Config];
-              false when is_list(Config) ->
-                if
-                  length(Config) > 0 -> ok;
-                  true -> error(badarg)
-                end,
-                Config;
-              false -> error(badarg)
-            end,
+  case is_map(Config) of
+    true ->
+      N = maps:get(num_connections, Config, 1),
+      [client_spec(teleport_client:client_name(Name, I), Name, Config)
+        || I <- lists:seq(1, N)];
+    false when is_list(Config) ->
+      if
+        length(Config) > 0 -> ok;
+        true -> error(badarg)
+      end,
+      group_specs(Config, 0, Name, []);
+    false ->
+      error(badarg)
+  end.
 
-  ClientSpecs = lists:map(
-    fun(Conf) ->
-      NumClients = maps:get(num_connections, Conf, 1),
-      Host = maps:get(host, Conf, HostName),
-      Port = maps:get(port, Conf, ?DEFAULT_PORT),
-      lists:map(
-        fun(I) ->
-          client_spec({'teleport_client', Name, {Host, Port}, I}, Name, Config)
-        end,lists:seq(1, NumClients))
-    end, Configs),
-  lists:flatten(ClientSpecs).
+group_specs([Config0 | Rest], I, Name, Acc) ->
+  Config1 = case is_list(Config0) of
+              true ->
+                teleport_uri:parse(Config0);
+              false when is_map(Config0) ->
+                Config0;
+              false ->
+                error(badarg)
+            end,
+  I2 = I + 1,
+  Spec = client_spec(
+    teleport_client:client_name(Name, I2), Name, Config1
+  ),
+  group_specs(Rest, I, Name, [Spec | Acc]);
+group_specs([], _, _, Acc) ->
+  lists:reverse(Acc).
 
 client_spec(Id, Name, Config) ->
   #{id => Id,
-    start => {teleport_client, start_link, [Name, Config]},
+    start => {teleport_client, start_link, [Id, Name, Config]},
     restart => permanent,
     shutdown => 2000,
     type => worker,
