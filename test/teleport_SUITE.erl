@@ -46,7 +46,7 @@ basic(_Config) ->
   {ok, RemoteNode} = start_slave(remote_teleport),
   {ok, Port} = start_remote_server(RemoteNode),
 
-  true = teleport:connect(test, #{port => Port}),
+  true = teleport:start_pool(test, #{port => Port}),
 
   3 = teleport:call(test, test_module, add, [1,2]),
 
