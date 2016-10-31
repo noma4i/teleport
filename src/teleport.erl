@@ -14,7 +14,7 @@
   start_server/2,
   stop_server/1,
   server_uri/1,
-  connect/1,
+  connect/1, connect/2,
   disconnect/1,
   start_pool/2,
   stop_pool/1,
@@ -93,7 +93,13 @@ server_uri(Name) ->
 -spec connect(Uri::uri()) -> boolean().
 connect(Uri) when is_list(Uri) ->
   #{ name := Name } = Config = teleport_uri:parse(Uri),
-  start_pool(Name, Config).
+  teleport_conns_sup:connect(Name, Config).
+
+%% @doc connect to a server using an uri
+-spec connect(Uri::uri(), pool_options()) -> boolean().
+connect(Uri, Options) ->
+  #{ name := Name } = Config = teleport_uri:parse(Uri),
+  teleport_conns_sup:connect(Name, maps:merge(Config, Options)).
 
 %% @doc disconnect from a server
 -spec disconnect(atom()) -> ok.
@@ -105,7 +111,7 @@ start_pool(Name, Uri) when is_list(Uri) ->
   Config = teleport_uri:parse(Uri),
   teleport_conns_sup:start_pool(Name, Config#{name => Name});
 start_pool(Name, Config) when is_atom(Name) ->
-  teleport_conns_sup:connect(Name, Config).
+  teleport_conns_sup:start_pool(Name, Config).
 
 start_pool(Name, Uri, Options) ->
   Config = teleport_uri:parse(Uri),
