@@ -96,10 +96,13 @@ connect(Uri) when is_list(Uri) ->
   teleport_conns_sup:connect(Name, Config).
 
 %% @doc connect to a server using an uri
--spec connect(Uri::uri(), pool_options()) -> boolean().
-connect(Uri, Options) ->
+-spec connect(Uri::uri(), pool_options()) -> boolean()
+        ; (Name::atom(), pool_options()) -> boolean().
+connect(Uri, Options) when is_list(Uri) ->
   #{ name := Name } = Config = teleport_uri:parse(Uri),
-  teleport_conns_sup:connect(Name, maps:merge(Config, Options)).
+  teleport_conns_sup:connect(Name, maps:merge(Config, Options));
+connect(Name, Config) when is_atom(Name), is_map(Config) ->
+  teleport_conns_sup:connect(Name, Config).
 
 %% @doc disconnect from a server
 -spec disconnect(atom()) -> ok.
