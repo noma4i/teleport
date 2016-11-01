@@ -20,7 +20,8 @@
 ]).
 
 -export([
-  client_name/2
+  client_name/2,
+  get_connection/1
 ]).
 
 
@@ -160,6 +161,27 @@ client_name(Name, I) ->
     ?MODULE_STRING ++ [$-|atom_to_list(Name)] ++ [$-| integer_to_list(I)]
   ).
 
+get_connection(Client) ->
+  case catch robust_call(Client, get_connection) of
+    {'EXIT', {noproc, _}} -> {badrpc, not_connected};
+    Res -> Res
+  end.
+
+%% If the gen_statem crashes we want to give the supervisor
+%% a decent chance to restart it before failing our calls.
+robust_call(Mgr, Req) ->
+   robust_call(Mgr, Req, 99). % (99+1)*100ms = 10s
+
+robust_call(Mgr, Req, 0) ->
+  gen_statem:call(Mgr, Req, infinity);
+robust_call(Mgr, Req, Retries) ->
+  try
+    gen_statem:call(Mgr, Req, infinity)
+  catch exit:{noproc, _} ->
+    timer:sleep(100),
+    robust_call(Mgr, Req, Retries - 1)
+  end.
+
 start_link(Id, Name, Config) ->
   gen_statem:start_link({local, Id}, ?MODULE,[Id, Name, Config], []).
 
@@ -261,9 +283,15 @@ wait_handshake(info, {OK, Sock, Payload}, Data = #{ transport := Transport, sock
       _ = cleanup(Data),
       {stop, normal, Data}
   end;
+wait_handshake({call, _From}, get_connection, Data) ->
+  {keep_state, Data, postpone};
 wait_handshake(EventType, EventContent, Data) ->
   handle_event(EventType, wait_handshake, EventContent,Data).
 
+
+wait_for_data({call, From}, get_connection, Data = #{ transport := Transport, sock := Sock}) ->
+  Reply = {ok, {self, {Transport, Sock}}},
+  {keep_state, Data, [{reply, From, Reply}]};
 wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
   try erlang:binary_to_term(PayLoad) of
     {call_result, Headers, Result} ->
@@ -309,9 +337,9 @@ handle_event(info, _State, heartbeat, Data) ->
     true ->
       {keep_state, activate_socket(Data#{missed_heartbeats => M2})}
   end;
-handle_event(Event, EventType, State, Data = #{ transport := Transport, sock := Sock }) ->
+handle_event(EventType, State, Event, Data = #{ transport := Transport, sock := Sock }) ->
   {_OK, Closed, Error} = Transport:messages(),
-  case EventType of
+  case Event of
     {Closed, Sock} ->
       handle_conn_closed(Closed, State, Data);
     {Error, Sock, Reason} ->

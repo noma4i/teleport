@@ -50,6 +50,8 @@ basic(_Config) ->
 
   3 = teleport:call(test, test_module, add, [1,2]),
 
+  teleport:disconnect(test),
+
   ok = stop_remote_server(RemoteNode),
   ok = stop_slave(remote_teleport),
   ok.

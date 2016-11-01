@@ -77,27 +77,21 @@ conn_status() ->
 
 random_conn(Name) ->
   case ets:lookup(teleport_lb, Name) of
-    [#teleport_lb{conns = [Conn]}] ->
-      {ok, Conn};
-    [#teleport_lb{num_conns = N, conns = Conns}] when N > 0 ->
+    [#teleport_lb{clients=N}] when N > 0 ->
       N2 = rand:uniform(N),
-      {ok, lists:nth(N2, Conns)};
+      ClientId = teleport_client:client_name(Name, N2),
+      teleport_client:get_connection(ClientId);
     _ ->
       {badrpc, not_connected}
   end.
 
 hash_conn(Name, HashKey) ->
   case ets:lookup(teleport_lb, Name) of
-    [#teleport_lb{conns = [Conn]}] ->
-      {ok, Conn};
-    [#teleport_lb{clients=N, conns_by_id=ById}] ->
+    [#teleport_lb{clients=N}] ->
       Index = 1 + erlang:phash2(HashKey, N),
       ClientId = teleport_client:client_name(Name, Index),
-      case maps:find(ClientId, ById) of
-        {ok, Conn} -> {ok, Conn};
-        _error-> {badrpc, not_connected}
-      end;
-    _ ->
+      teleport_client:get_connection(ClientId);
+    [] ->
       {badrpc, not_connected}
   end.
 

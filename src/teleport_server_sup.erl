@@ -30,24 +30,26 @@ start_link() ->
   supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 start_server(Name, Config) when is_map(Config) ->
-  case supervisor:start_child(?MODULE, server_spec(server_name(Name), Name, Config)) of
+  case supervisor:start_child(?MODULE, server_spec(Name, Config)) of
     {ok, Pid} ->
       lager:info("teleport: start server: ~s", [get_uri(Name)]),
       {ok, Pid};
     {error, {already_started, Pid}} ->
-      {ok, Pid}
+      case teleport_server:get_config(Pid) of
+        Config -> {ok, Pid};
+        _ -> {error, bad_server_config}
+      end
   end;
 start_server(Name, Config) when is_list(Config) ->
   start_server(Name, maps:from_list(Config));
 start_server(_, _) -> erlang:error(badarg).
 
 stop_server(Name) ->
-  Server = server_name(Name),
   Uri = get_uri(Name),
-  case supervisor:terminate_child(?MODULE, Server) of
+  case supervisor:terminate_child(?MODULE, listener_name(Name)) of
     ok ->
-      _ = supervisor:delete_child(?MODULE, Server),
-      _ = ranch_server:cleanup_listener_opts(Server),
+      _ = supervisor:delete_child(?MODULE, listener_name(Name)),
+      ranch_server:cleanup_listener_opts(server_name(Name)),
       lager:info("teleport: stopped server ~s~n", [Uri]),
       ok;
     Error ->
@@ -55,12 +57,12 @@ stop_server(Name) ->
       Error
   end.
 
-get_port(Name) -> ranch:get_port(Name).
+get_port(Name) -> ranch:get_port(server_name(Name)).
 
-get_addr(Name) -> ranch:get_addr(Name).
+get_addr(Name) -> ranch:get_addr(server_name(Name)).
 
 get_uri(Name) ->
-  #{host := Host, transport := Transport} = ranch:get_protocol_options(Name),
+  #{host := Host, transport := Transport} = ranch:get_protocol_options(server_name(Name)),
   Port = get_port(Name),
   UriBin = iolist_to_binary(
     ["teleport.", atom_to_list(teleport_uri:to_transport(Transport)), "://",
@@ -83,18 +85,31 @@ init([]) ->
                  [{SName, [{host, Host}, {port, ?DEFAULT_PORT} | NodeConfig]} | Servers]
              end,
   Specs = lists:map(fun({Name, Config}) ->
-      server_spec(server_name(Name), Name, Config)
+      server_spec(Name, Config)
     end, Servers1),
   {ok, {{one_for_one, 1, 5}, Specs}}.
 
-server_spec(ServerName, Name, Config) ->
-  #{id => ServerName,
-    start => {teleport_server, start_link, [ServerName, Name, Config]},
-    restart => permanent,
-    shutdown => 2000,
-    type => worker,
-    modules => [teleport_server]}.
+server_spec(Name, Config) ->
+  {ok, HostName} = inet:gethostname(),
+  Host = maps:get(host, Config, HostName),
+  Port = maps:get(port, Config, 0),
+  NumAcceptors = maps:get(num_acceptors, Config, 100),
+  Transport = teleport_uri:parse_transport(Config),
+  TransportOpts0 = case Transport of
+                     ranch_tcp -> [{backlog, 2048}];
+                     ranch_ssl ->
+                       Host = maps:get(host, Config, inet:gethostname()),
+                       teleport_lib:ssl_conf(server, Host)
+                   end,
+  TransportOpts = [{port, Port} | TransportOpts0],
 
+  ranch:child_spec(
+    server_name(Name), NumAcceptors, Transport, TransportOpts,
+    teleport_protocol, #{ host => Host, transport => Transport, name => Name}
+  ).
+
+listener_name(Name) ->
+  {ranch_listener_sup, server_name(Name)}.
 
 server_name(Name) ->
   teleport_lib:to_atom("teleport_server" ++ [$_|atom_to_list(Name)]).

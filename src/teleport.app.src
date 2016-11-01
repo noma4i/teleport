@@ -8,7 +8,7 @@
 
 {application, teleport,
   [{description, "application to call remote functions"},
-    {vsn, "0.3.0"},
+    {vsn, "0.4.0"},
     {registered, []},
     {mod, { teleport_app, []}},
     {applications,
@@ -16,6 +16,7 @@
         stdlib,
         lager,
         crypto,
+        asn1,
         public_key,
         ssl,
         ranch

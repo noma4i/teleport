@@ -90,8 +90,8 @@ wait_for_handshake(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK})
       lager:warning("teleport: bad handshake from ~p: ~w", [PeerHost, Data]),
       {stop, normal, Data}
   end;
-wait_for_handshake(Event, EventType, Data) ->
-  handle_event(Event, wait_for_handshake, EventType, Data).
+wait_for_handshake(EventType, Event, Data) ->
+  handle_event(EventType, wait_for_handshake, Event, Data).
 
 wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
   try erlang:binary_to_term(PayLoad) of
@@ -122,8 +122,8 @@ wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
       {stop, normal, Data}
   end;
 
-wait_for_data(Event, EventType, Data) ->
-  handle_event(Event, wait_for_data, EventType, Data).
+wait_for_data(EventType, Event, Data) ->
+  handle_event(EventType, wait_for_data, Event, Data).
 
 handle_event(info, _State, heartbeat, Data) ->
   #{transport := Transport,
@@ -141,10 +141,10 @@ handle_event(info, _State, heartbeat, Data) ->
     true ->
       {keep_state, activate_socket(Data#{missed_heartbeats => M2})}
   end;
-handle_event(Event, State, EventType, Data) ->
+handle_event(EventType, State, Event, Data) ->
   #{ transport := Transport, sock := Sock } = Data,
   {_OK, Closed, Error} = Transport:messages(),
-  case EventType of
+  case Event of
     {Closed, Sock} ->
       handle_conn_closed(Closed, State, Data);
     {Error, Sock, Reason} ->
