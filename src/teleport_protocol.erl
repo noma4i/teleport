@@ -70,7 +70,7 @@ wait_for_handshake(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK})
   Cookie = erlang:get_cookie(),
   try erlang:binary_to_term(PayLoad) of
     {connect, ClientCookie, PeerNode}  when ClientCookie =:= Cookie ->
-      lager:info("teleport: server connected to peer node: ~p~n", [PeerNode]),
+      lager:info("teleport: system connected to peer node: ~p~n", [PeerNode]),
       ets:insert(teleport_incoming_conns, {self(), PeerHost, PeerNode}),
       ok = send_handshake(Data),
       {next_state, wait_for_data, activate_socket(Data)};
@@ -151,14 +151,14 @@ handle_event(EventType, State, Event, Data) ->
       handle_conn_closed({Error, Reason}, State, Data);
     _ ->
       lager:error(
-        "teleport: server [~p] received an unknown event: ~p ~p",
+        "teleport: system [~p] received an unknown event: ~p ~p",
         [State, Event, EventType]
       ),
       {stop, normal, cleanup(Data)}
     end.
 
 handle_conn_closed(Error, State, Data = #{ peer_host := Host}) ->
-  lager:debug("teleport:connection from ~p closed (~p). Reason: ~p~n", [Host, State, Error]),
+  lager:debug("teleport: connection from ~p closed (~p). Reason: ~p~n", [Host, State, Error]),
   {stop, normal, cleanup(Data)}.
 
 worker(Mod, Fun, Args) -> apply(Mod, Fun, Args).

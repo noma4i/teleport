@@ -346,7 +346,7 @@ handle_event(EventType, State, Event, Data = #{ transport := Transport, sock := 
       handle_conn_closed({Error, Reason}, State, Data);
     _ ->
       lager:error(
-        "teleport: server [~p] received an unknown event: ~p ~p",
+        "teleport: client [~p] received an unknown event: ~p ~p",
         [State, Event, EventType]
       ),
       {stop, normal, cleanup(Data)}

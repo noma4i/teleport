@@ -6,11 +6,11 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
--module(teleport_server_sup).
+-module(teleport_system_sup).
 
 -export([
-  start_server/2,
-  stop_server/1,
+  start_system/2,
+  stop_system/1,
   get_port/1,
   get_addr/1,
   get_uri/1
@@ -29,40 +29,40 @@
 start_link() ->
   supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-start_server(Name, Config) when is_map(Config) ->
-  case supervisor:start_child(?MODULE, server_spec(Name, Config)) of
+start_system(Name, Config) when is_map(Config) ->
+  case supervisor:start_child(?MODULE, system_spec(Name, Config)) of
     {ok, Pid} ->
-      lager:info("teleport: start server: ~s", [get_uri(Name)]),
+      lager:info("teleport: start system: ~s", [get_uri(Name)]),
       {ok, Pid};
     {error, {already_started, Pid}} ->
-      case teleport_server:get_config(Pid) of
+      case teleport_system:get_config(Pid) of
         Config -> {ok, Pid};
         _ -> {error, bad_server_config}
       end
   end;
-start_server(Name, Config) when is_list(Config) ->
-  start_server(Name, maps:from_list(Config));
-start_server(_, _) -> erlang:error(badarg).
+start_system(Name, Config) when is_list(Config) ->
+  start_system(Name, maps:from_list(Config));
+start_system(_, _) -> erlang:error(badarg).
 
-stop_server(Name) ->
+stop_system(Name) ->
   Uri = get_uri(Name),
   case supervisor:terminate_child(?MODULE, listener_name(Name)) of
     ok ->
       _ = supervisor:delete_child(?MODULE, listener_name(Name)),
-      ranch_server:cleanup_listener_opts(server_name(Name)),
-      lager:info("teleport: stopped server ~s~n", [Uri]),
+      ranch_server:cleanup_listener_opts(system_name(Name)),
+      lager:info("teleport: stopped system ~s~n", [Uri]),
       ok;
     Error ->
-      lager:error("teleport: error stopping server ~p~n", [Name]),
+      lager:error("teleport: error stopping system ~p~n", [Uri]),
       Error
   end.
 
-get_port(Name) -> ranch:get_port(server_name(Name)).
+get_port(Name) -> ranch:get_port(system_name(Name)).
 
-get_addr(Name) -> ranch:get_addr(server_name(Name)).
+get_addr(Name) -> ranch:get_addr(system_name(Name)).
 
 get_uri(Name) ->
-  #{host := Host, transport := Transport} = ranch:get_protocol_options(server_name(Name)),
+  #{host := Host, transport := Transport} = ranch:get_protocol_options(system_name(Name)),
   Port = get_port(Name),
   UriBin = iolist_to_binary(
     ["teleport.", atom_to_list(teleport_uri:to_transport(Transport)), "://",
@@ -77,19 +77,19 @@ get_uri(Name) ->
 
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
-  Servers = application:get_env(teleport, servers, []),
-  Servers1 = case application:get_env(teleport, node_config) of
-               undefined -> Servers;
+  Systems = application:get_env(teleport, systems, []),
+  Systems1 = case application:get_env(teleport, node_config) of
+               undefined -> Systems;
                {ok, NodeConfig} ->
                  [SName, Host] = string:tokens(atom_to_list(node()), "@"),
-                 [{SName, [{host, Host}, {port, ?DEFAULT_PORT} | NodeConfig]} | Servers]
+                 [{SName, [{host, Host}, {port, ?DEFAULT_PORT} | NodeConfig]} | Systems]
              end,
   Specs = lists:map(fun({Name, Config}) ->
-      server_spec(Name, Config)
-    end, Servers1),
+      system_spec(Name, Config)
+    end, Systems1),
   {ok, {{one_for_one, 1, 5}, Specs}}.
 
-server_spec(Name, Config) ->
+system_spec(Name, Config) ->
   {ok, HostName} = inet:gethostname(),
   Host = maps:get(host, Config, HostName),
   Port = maps:get(port, Config, 0),
@@ -104,12 +104,12 @@ server_spec(Name, Config) ->
   TransportOpts = [{port, Port} | TransportOpts0],
 
   ranch:child_spec(
-    server_name(Name), NumAcceptors, Transport, TransportOpts,
+    system_name(Name), NumAcceptors, Transport, TransportOpts,
     teleport_protocol, #{ host => Host, transport => Transport, name => Name}
   ).
 
 listener_name(Name) ->
-  {ranch_listener_sup, server_name(Name)}.
+  {ranch_listener_sup, system_name(Name)}.
 
-server_name(Name) ->
-  teleport_lib:to_atom("teleport_server" ++ [$_|atom_to_list(Name)]).
+system_name(Name) ->
+  teleport_lib:to_atom("teleport_system" ++ [$_|atom_to_list(Name)]).

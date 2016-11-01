@@ -69,14 +69,14 @@ stop_remote_server(HostNode) ->
   ok.
 
 run_on_slave_start_teleport() ->
-  {ok, _Pid} = teleport:start_server(test, []),
-  Port = teleport_server_sup:get_port(test),
+  {ok, _Pid} = teleport:start_system(test, []),
+  Port = teleport_system_sup:get_port(test),
 
   ct:log("[~p][~p] teleport server started on ~p", [node(), ?MODULE, Port]),
   {ok_from_slave, Port}.
 
 run_on_slave_stop_teleport() ->
-  ok = teleport:stop_server(test),
+  ok = teleport:stop_system(test),
   ct:log("[~p][~p] teleport server stopped", [node(), ?MODULE]),
   ok_from_slave.
 

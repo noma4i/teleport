@@ -51,12 +51,12 @@ init([]) ->
   },
 
   ServerSup = #{
-    id => teleport_server_sup,
-    start => {teleport_server_sup, start_link, []},
+    id => teleport_system_sup,
+    start => {teleport_system_sup, start_link, []},
     restart => permanent,
     shutdown => 5000,
     type => supervisor,
-    modules => [teleport_server_sup]
+    modules => [teleport_system_sup]
   },
 
   ConnsSup = #{

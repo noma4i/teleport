@@ -11,8 +11,8 @@
 
 %% API
 -export([
-  start_server/2,
-  stop_server/1,
+  start_system/2,
+  stop_system/1,
   server_uri/1,
   connect/1, connect/2,
   disconnect/1,
@@ -74,20 +74,22 @@
   server_config/0
 ]).
 
-%% @doc start a server that will handle a route
--spec start_server(atom(), server_config()) -> {ok, pid()} |{error, term()}.
-start_server(Name, Config) ->
-  teleport_server_sup:start_server(Name, Config).
+%% @doc start a system.  A system is a hierarchical group of processes which
+%% share common configuration. It is also the entry point for registering or
+%% looking up proceses.
+-spec start_system(atom(), server_config()) -> {ok, pid()} |{error, term()}.
+start_system(Name, Config) ->
+  teleport_system_sup:start_system(Name, Config).
 
-%% @doc stop a server
--spec stop_server(atom()) -> ok.
-stop_server(Name) ->
-  teleport_server_sup:stop_server(Name).
+%% @doc stop a system
+-spec stop_system(atom()) -> ok.
+stop_system(Name) ->
+  teleport_system_sup:stop_system(Name).
 
 %% @doc get the server uri that can be used to connect from a client
 -spec server_uri(atom()) -> uri().
 server_uri(Name) ->
-  teleport_server_sup:get_uri(Name).
+  teleport_system_sup:get_uri(Name).
 
 %% @doc connect to a server using an uri
 -spec connect(Uri::uri()) -> boolean().
