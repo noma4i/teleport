@@ -13,11 +13,8 @@ purpose inside the barrel project and not yet supported for external usages.
 
 For example things that are expected to change are the following:
 
-- routing configuration . for now the routing and dispatching is quite primitive and 
-need to be extended to handle true roundrobin and groups 
-- message dispatching. For now we mimic the RPC api, but we may need something more dynamic
-
-Also the plugin api is not implemented. 
+* message dispatching. For now we mimic the RPC api, but we may need something more dynamic
+* the plugin transport api is not implemented. 
 
 Build
 -----

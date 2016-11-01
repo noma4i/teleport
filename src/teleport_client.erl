@@ -253,6 +253,8 @@ connect(info, connect, Data) ->
           {stop, normal, Data}
       end
   end;
+connect({call, _From}, get_connection, Data) ->
+  {keep_state, Data, postpone};
 connect(EventType, EventContent, Data) ->
   handle_event(EventType, connect, EventContent,Data).
 
