@@ -117,7 +117,7 @@ wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
       {stop, error, normal}
   catch
     error:badarg ->
-      lager:info("teleport: bad data: ~w", [Data]),
+      lager:warning("teleport: bad data: ~w", [Data]),
       cleanup(Data),
       {stop, normal, Data}
   end;
@@ -135,7 +135,7 @@ handle_event(info, _State, heartbeat, Data) ->
   M2 = M + 1,
   if
     M2 > 3 ->
-      lager:info("Missed ~p heartbeats from ~p. Closing connection~n", [M2, PeerHost]),
+      lager:warning("Missed ~p heartbeats from ~p. Closing connection~n", [M2, PeerHost]),
       _ = cleanup(Data),
       {stop, normal, Data};
     true ->
@@ -158,7 +158,7 @@ handle_event(EventType, State, Event, Data) ->
     end.
 
 handle_conn_closed(Error, State, Data = #{ peer_host := Host}) ->
-  lager:info("teleport:connection from ~p closed (~p). Reason: ~p~n", [Host, State, Error]),
+  lager:debug("teleport:connection from ~p closed (~p). Reason: ~p~n", [Host, State, Error]),
   {stop, normal, cleanup(Data)}.
 
 worker(Mod, Fun, Args) -> apply(Mod, Fun, Args).

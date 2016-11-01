@@ -266,17 +266,17 @@ wait_handshake(info, {OK, Sock, Payload}, Data = #{ transport := Transport, sock
       teleport_lb:connected(Name, {Id, {Transport, Sock}}),
       {next_state, wait_for_data, activate_socket(Data#{peer_node => PeerNode})};
     {connection_rejected, Reason} ->
-      lager:error("teleport: connection rejected", [Reason]),
+      lager:warning("teleport: connection rejected", [Reason]),
       handle_conn_closed(Data, wait_handshake, {connection_rejected, Reason}),
       {stop, normal, Data};
     heartbeat ->
       {keep_statee, activate_socket(Data#{missed_heartbeats => 0})};
     _OtherMsg ->
-      lager:info("teleport: got unknown message ~p~n", [_OtherMsg]),
+      lager:warning("teleport: got unknown message ~p~n", [_OtherMsg]),
       {keep_state, activate_socket(Data)}
   catch
     error:badarg ->
-      lager:info(
+      lager:warning(
         "teleport: client for ~p error during handshake to bad data : ~w",
         [Name, Payload]
       ),
@@ -331,7 +331,7 @@ handle_event(info, _State, heartbeat, Data) ->
   M2 = M + 1,
   if
     M2 > 3 ->
-      lager:info("Missed ~p heartbeats from ~p. Closing connection~n", [M2, PeerNode]),
+      lager:warning("Missed ~p heartbeats from ~p. Closing connection~n", [M2, PeerNode]),
       _ = cleanup(Data),
       {stop, normal, Data};
     true ->
@@ -353,7 +353,7 @@ handle_event(EventType, State, Event, Data = #{ transport := Transport, sock := 
   end.
 
 handle_conn_closed(Error, State, Data = #{name := Name, peer_node := PeerNode}) ->
-  lager:info(
+  lager:debug(
     "teleport:lost client connection in ~p from ~p[~p]. Reason: ~p~n",
     [State, Name, PeerNode, Error]
   ),
