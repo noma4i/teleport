@@ -35,10 +35,8 @@ start_system(Name, Config) when is_map(Config) ->
       lager:info("teleport: start system: ~s", [get_uri(Name)]),
       {ok, Pid};
     {error, {already_started, Pid}} ->
-      case teleport_system:get_config(Pid) of
-        Config -> {ok, Pid};
-        _ -> {error, bad_server_config}
-      end
+      lager:info("teleport: start system: ~s", [get_uri(Name)]),
+      {ok, Pid}
   end;
 start_system(Name, Config) when is_list(Config) ->
   start_system(Name, maps:from_list(Config));
