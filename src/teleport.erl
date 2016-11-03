@@ -13,7 +13,7 @@
 -export([
   start_system/2,
   stop_system/1,
-  server_uri/1,
+  system_uri/1,
   connect/1, connect/2,
   disconnect/1,
   start_pool/2,
@@ -87,8 +87,8 @@ stop_system(Name) ->
   teleport_system_sup:stop_system(Name).
 
 %% @doc get the server uri that can be used to connect from a client
--spec server_uri(atom()) -> uri().
-server_uri(Name) ->
+-spec system_uri(atom()) -> uri().
+system_uri(Name) ->
   teleport_system_sup:get_uri(Name).
 
 %% @doc connect to a server using an uri
