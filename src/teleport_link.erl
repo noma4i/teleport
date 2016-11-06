@@ -6,21 +6,20 @@
 %% License, v. 2.0. If a copy of the MPL was not distributed with this
 %% file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
--module(teleport_client).
+-module(teleport_link).
 -behaviour(gen_statem).
 
 %% API
 -export([
-  start_link/3,
-  call/6,
-  blocking_call/6,
-  cast/5,
+  call/5,
+  blocking_call/5,
+  cast/4,
   abcast/3,
   sbcast/3
 ]).
 
 -export([
-  client_name/2,
+  start_link/2,
   get_connection/1
 ]).
 
@@ -44,27 +43,27 @@
 
 -define(TIMEOUT, 5000).
 
-call(Name, Mod, Fun, Args, Strategy, Timeout) ->
-  case do_call(Name, call, Mod, Fun, Args, Strategy) of
+call(Name, Mod, Fun, Args, Timeout) ->
+  case do_call(Name, call, Mod, Fun, Args) of
     {ok, Headers} -> wait_reply(Headers, Timeout);
     Error -> Error
   end.
 
-cast(Name, Mod, Fun, Args, Strategy) ->
-  case do_call(Name, cast, Mod, Fun, Args, Strategy) of
+cast(Name, Mod, Fun, Args) ->
+  case do_call(Name, cast, Mod, Fun, Args) of
     {ok, _Headers} -> ok;
     Error -> Error
   end.
 
-blocking_call(Name, Mod, Fun, Args, Strategy, Timeout) ->
-  case do_call(Name, blocking_call, Mod, Fun, Args, Strategy) of
+blocking_call(Name, Mod, Fun, Args, Timeout) ->
+  case do_call(Name, blocking_call, Mod, Fun, Args) of
     {ok, Headers} -> wait_reply(Headers, Timeout);
     Error -> Error
   end.
 
 
 abcast([Name | Rest], ProcName, Msg) ->
-  case teleport_lb:random_conn(Name) of
+  case get_connection(Name) of
     {ok, {_Pid, {Transport, Sock}}} ->
       Packet = term_to_binary({abcast, ProcName, Msg}),
       ok = Transport:send(Sock, Packet),
@@ -84,7 +83,7 @@ sbcast(Names, ProcName, Msg) ->
   wait_for_sbcast(Pids, [], []).
 
 sbcast_1(Parent, Name, ProcName, Msg) ->
-  case teleport_lb:random_conn(Name) of
+  case get_connection(Name) of
     {ok, {_Pid, {Transport, Sock}}} ->
       Headers =
         #{seq => erlang:unique_integer([positive, monotonic]),
@@ -120,14 +119,8 @@ wait_for_sbcast([], Good, Bad) ->
   {Good, Bad}.
 
 
-do_call(Name, CallType, Mod, Fun, Args, Strategy) ->
-  Res = case Strategy of
-          random -> teleport_lb:random_conn(Name);
-          next -> teleport_lb:next(Name);
-          {hash, Key} -> teleport_lb:hash_conn(Name, Key)
-        end,
-
-  case Res of
+do_call(Name, CallType, Mod, Fun, Args) ->
+  case get_connection(Name) of
     {ok, {_Pid, {Transport, Sock}}} ->
       Headers =
         #{seq => erlang:unique_integer([positive, monotonic]),
@@ -156,11 +149,6 @@ wait_reply(Headers, Timeout) ->
     {error, timeout}
   end.
 
-client_name(Name, I) ->
-  list_to_atom(
-    ?MODULE_STRING ++ [$-|atom_to_list(Name)] ++ [$-| integer_to_list(I)]
-  ).
-
 get_connection(Client) ->
   case catch robust_call(Client, get_connection) of
     {'EXIT', {noproc, _}} -> {badrpc, not_connected};
@@ -182,22 +170,21 @@ robust_call(Mgr, Req, Retries) ->
     robust_call(Mgr, Req, Retries - 1)
   end.
 
-start_link(Id, Name, Config) ->
-  gen_statem:start_link({local, Id}, ?MODULE,[Id, Name, Config], []).
+start_link(Name, Config) ->
+  gen_statem:start_link({local, Name}, ?MODULE,[Name, Config], []).
 
-init([Id, Name, Config]) ->
+init([Name, Config]) ->
   process_flag(trap_exit, true),
   self() ! connect,
   %% initialize the data
   Host = maps:get(host, Config, "localhost"),
   Port = maps:get(port, Config, ?DEFAULT_PORT),
   Retries = maps:get(retry, Config, 3),
-  Transport = teleport_uri:parse_transport(Config),
+  Transport = teleport_lib:parse_transport(Config),
   {OK, _Closed, _Error} = Transport:messages(),
   Data =
     #{
       name => Name,
-      id => Id,
       host => Host,
       port => Port,
       transport => Transport,
@@ -258,14 +245,13 @@ connect({call, _From}, get_connection, Data) ->
 connect(EventType, EventContent, Data) ->
   handle_event(EventType, connect, EventContent,Data).
 
-wait_handshake(info, {OK, Sock, Payload}, Data = #{ transport := Transport, sock := Sock, ok := OK}) ->
-  #{name := Name, id := Id, host := Host} = Data,
+wait_handshake(info, {OK, Sock, Payload}, Data = #{ sock := Sock, ok := OK}) ->
+  #{name := Name, host := Host} = Data,
   try erlang:binary_to_term(Payload) of
     {connected, PeerNode} ->
       lager:info("teleport: client connected to peer-node ~p[~p]~n", [Name, PeerNode]),
       ets:insert(teleport_incoming_conns, {self(), Host, PeerNode}),
-      teleport_monitor:nodeup(PeerNode),
-      teleport_lb:connected(Name, {Id, {Transport, Sock}}),
+      teleport_monitor:linkup(Name),
       {next_state, wait_for_data, activate_socket(Data#{peer_node => PeerNode})};
     {connection_rejected, Reason} ->
       lager:warning("teleport: connection rejected", [Reason]),
@@ -292,7 +278,7 @@ wait_handshake(EventType, EventContent, Data) ->
 
 
 wait_for_data({call, From}, get_connection, Data = #{ transport := Transport, sock := Sock}) ->
-  Reply = {ok, {self, {Transport, Sock}}},
+  Reply = {ok, {self(), {Transport, Sock}}},
   {keep_state, Data, [{reply, From, Reply}]};
 wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
   try erlang:binary_to_term(PayLoad) of
@@ -375,17 +361,10 @@ cleanup(Data) ->
   #{heartbeat := Heartbeat,
     name := Name,
     sock := Sock,
-    transport := Transport,
-    peer_node := PeerNode} = Data,
+    transport := Transport} = Data,
 
-  if
-    PeerNode =/= undefined -> teleport_monitor:nodedown(PeerNode);
-    true -> ok
-  end,
-
-  _ = teleport_lb:disconnected(Name),
+  _ = teleport_monitor:linkdown(Name),
   catch ets:delete(teleport_incoming_conns, self()),
-
   catch Transport:close(Sock),
   catch timer:cancel(Heartbeat),
 

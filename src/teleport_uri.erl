@@ -12,20 +12,16 @@
 %% API
 -export([
   parse/1,
-  parse_transport/1,
-  get_transport/1,
-  to_transport/1
+  config_from_uri/1
 ]).
 
 -include("teleport.hrl").
 
 parse(Uri) ->
   case re:split(Uri, "://", [{return, list}]) of
-    [Scheme, Rest] ->
-      [_Prefix, Transport] = re:split(Scheme, "\\.", [{return, list}]),
+    [Proto, Rest] ->
       parse1(Rest,
-        #{scheme => Scheme,
-          transport => list_to_atom(Transport),
+        #{proto => Proto,
           path => "/"});
     _ -> error(bad_uri)
   end.
@@ -73,9 +69,9 @@ parse_query(S, Parsed) ->
 parse_addr(Addr, Parsed) ->
   case re:split(Addr, "@", [trim, {return, list}]) of
     [Addr] ->
-      erlang:error(bad_uri);
-    [Name, Addr2] ->
-      parse_addr_1(Addr2, Parsed#{ name => teleport_lib:to_atom(Name)})
+      parse_addr_1(Addr, Parsed#{ user => nil});
+    [User, Addr2] ->
+      parse_addr_1(Addr2, Parsed#{ user => User})
   end.
 
 parse_addr_1([$[ | Rest], Parsed) ->
@@ -104,16 +100,16 @@ dec("true") -> true;
 dec("false") -> false;
 dec(_) -> error(badarg).
 
-%% TODO: add a better way to make transports pluggable
-parse_transport(#{ transport := ssl}) -> ranch_ssl;
-parse_transport(#{ transport := tcp}) -> ranch_tcp;
-parse_transport(#{ transport := Else}) -> Else;
-parse_transport(_) -> ranch_tcp.
-
-get_transport(tcp) -> ranch_tcp;
-get_transport(ssl) -> ranch_ssl;
-get_transport(Mod) -> Mod.
-
-to_transport(ranch_tcp) -> tcp;
-to_transport(ranch_ssl) -> ssl;
-to_transport(Mod) -> Mod.
+config_from_uri(Uri) ->
+  #{ proto := Proto } = Parsed = parse(Uri),
+  case Proto of
+    "link" -> {ok, Parsed#{ transport => tcp }};
+    "slink" -> {ok, Parsed#{ transport => ssl }};
+    _ ->
+      Protos = application:get_env(teleport, protocols, []),
+      case proplists:get_value(Proto, Protos) of
+        undefined -> unsuported_protocol;
+        Mod ->
+          Mod:setup(Parsed)
+      end
+  end.

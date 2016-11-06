@@ -34,13 +34,6 @@ init([]) ->
   _ = ets:new(teleport_incoming_conns, [named_table, public]),
   _ = ets:new(teleport_outgoing_conns, [named_table, public]),
 
-  %% lb pids
-  _ = ets:new(teleport_lb, [
-    named_table, public,
-    {read_concurrency, true},
-    {keypos, 2}
-  ]),
-
   Monitor = #{
     id => teleport_monitor,
     start => {teleport_monitor, start_link, []},
@@ -51,26 +44,26 @@ init([]) ->
   },
 
   ServerSup = #{
-    id => teleport_system_sup,
-    start => {teleport_system_sup, start_link, []},
+    id => teleport_server_sup,
+    start => {teleport_server_sup, start_link, []},
     restart => permanent,
     shutdown => 5000,
     type => supervisor,
-    modules => [teleport_system_sup]
+    modules => [teleport_server_sup]
   },
 
-  ConnsSup = #{
-    id => teleport_conns_sup,
-    start => {teleport_conns_sup, start_link, []},
+  LinkSup = #{
+    id => teleport_link_sup,
+    start => {teleport_link_sup, start_link, []},
     restart => permanent,
     shutdown => 5000,
     type => supervisor,
-    modules => [teleport_conns_sup]
+    modules => [teleport_link_sup]
   },
   
   
 
-  {ok, { {one_for_one, 5, 10}, [Monitor, ServerSup, ConnsSup]} }.
+  {ok, { {one_for_one, 5, 10}, [Monitor, ServerSup, LinkSup]} }.
 
 %%====================================================================
 %% Internal functions

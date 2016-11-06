@@ -23,38 +23,124 @@
 -export([run_on_slave_start_teleport/0]).
 -export([run_on_slave_stop_teleport/0]).
 
--export([basic/1]).
+-export([
+  basic/1,
+  monitor_link/1,
+  monitor_links/1,
+  monitor_links2/1
+]).
 
-all() -> [basic].
+all() -> [
+  basic,
+  monitor_link,
+  monitor_links,
+  monitor_links2
+].
 
 init_per_suite(Config) ->
   {ok, _} = application:ensure_all_started(teleport),
-  Config.
+  {ok, RemoteNode} = start_slave(remote_teleport),
+  [{remote, RemoteNode} |Config].
 
-init_per_testcase(_, Config) ->
-  Config.
+init_per_testcase(_,  Config) ->
+  RemoteNode = proplists:get_value(remote, Config),
+  {ok, Port} = start_remote_server(RemoteNode),
+  [{port, Port} |Config].
 
 end_per_testcase(_, Config) ->
-  Config.
+  RemoteNode = proplists:get_value(remote, Config),
+  ok = stop_remote_server(RemoteNode),
+  proplists:delete(port, Config).
 
 end_per_suite(Config) ->
+  ok = stop_slave(remote_teleport),
   Config.
 
 %% ----------
 
-basic(_Config) ->
-  {ok, RemoteNode} = start_slave(remote_teleport),
-  {ok, Port} = start_remote_server(RemoteNode),
-
+basic([{port, Port}|_]) ->
   true = teleport:connect(test, #{port => Port}),
-
+  false = teleport:connect(test, #{port => Port}),
   3 = teleport:call(test, test_module, add, [1,2]),
-
+  true = (whereis(test) =/= undefined),
   teleport:disconnect(test),
-
-  ok = stop_remote_server(RemoteNode),
-  ok = stop_slave(remote_teleport),
+  true = (whereis(test) =:= undefined),
   ok.
+
+monitor_link([{port, Port}|_]) ->
+  teleport:monitor_link(test),
+  true = teleport:connect(test, #{port => Port}),
+  receive
+    {linkup, test} -> ok;
+    _ -> error(bad_monitor)
+  end,
+  teleport:disconnect(test),
+  receive
+    {linkdown, test} -> ok;
+    _ -> error(bad_monitor)
+  end,
+  teleport:demonitor_link(test),
+  true = teleport:connect(test, #{port => Port}),
+  receive
+    _ -> error(recvd_event)
+  after 0 -> ok
+  end,
+  teleport:disconnect(test),
+  timer:sleep(100),
+  ok.
+
+monitor_links([{port, Port}|_]) ->
+  teleport:monitor_links(true),
+  true = teleport:connect(test, #{port => Port}),
+  receive
+    {linkup, test} -> ok;
+    _ -> error(bad_monitor)
+  end,
+  teleport:disconnect(test),
+  receive
+    {linkdown, test} -> ok;
+    _ -> error(bad_monitor)
+  end,
+  teleport:monitor_links(false),
+  true = teleport:connect(test, #{port => Port}),
+  receive
+    _ -> error(recvd_event)
+  after 0 -> ok
+  end,
+  teleport:disconnect(test),
+  timer:sleep(100),
+  ok.
+
+monitor_links2([{port, Port}|_]) ->
+  teleport:monitor_links(true),
+  true = teleport:connect(test, #{port => Port}),
+  timer:sleep(200),
+  true = teleport:connect(test2, #{port => Port}),
+  timer:sleep(200),
+  UpEvents = collect_events([], 2),
+  true = (
+    UpEvents
+      =:=
+      [{linkup, test}, {linkup, test2}]
+  ),
+  teleport:disconnect(test),
+  teleport:disconnect(test2),
+  DownEvents = collect_events([], 2),
+  true = (
+    DownEvents
+      =:=
+      [{linkdown, test}, {linkdown, test2}]
+  ),
+  teleport:monitor_links(false),
+  ok.
+
+collect_events(Acc, 0) -> lists:reverse(Acc);
+collect_events(Acc, N) ->
+  receive
+    Msg -> collect_events([Msg | Acc], N - 1)
+  after 5000 -> error(timeout)
+  end.
+
 
 %% =============================================================================
 %% Helpers for creation of remote connections
@@ -69,14 +155,14 @@ stop_remote_server(HostNode) ->
   ok.
 
 run_on_slave_start_teleport() ->
-  {ok, _Pid} = teleport:start_system(test, []),
-  Port = teleport_system_sup:get_port(test),
+  {ok, _Pid} = teleport:start_server(test, []),
+  Port = teleport_server_sup:get_port(test),
 
   ct:log("[~p][~p] teleport server started on ~p", [node(), ?MODULE, Port]),
   {ok_from_slave, Port}.
 
 run_on_slave_stop_teleport() ->
-  ok = teleport:stop_system(test),
+  ok = teleport:stop_server(test),
   ct:log("[~p][~p] teleport server stopped", [node(), ?MODULE]),
   ok_from_slave.
 
