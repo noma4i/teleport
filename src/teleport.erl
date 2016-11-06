@@ -30,8 +30,6 @@
   monitor_links/1
 ]).
 
--export([default_strategy/0]).
-
 -include("teleport.hrl").
 
 -define(DEFAULT_STRATEGY, random).
@@ -149,12 +147,3 @@ abcast(Names, ProcName, Msg) ->
 
 sbcast(Names, ProcName, Msg) ->
   teleport_link:sbcast(Names, ProcName, Msg).
-
-
-%% internal
-
-default_strategy() ->
-  case application:get_env(teleport, default_strategy) of
-    undefined -> random;
-    {ok, Strategy} -> Strategy
-  end.
