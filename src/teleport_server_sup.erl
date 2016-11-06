@@ -13,7 +13,8 @@
   stop_server/1,
   get_port/1,
   get_addr/1,
-  get_uri/1
+  get_uri/1,
+  server_is_alive/1
 ]).
 
 -export([start_link/0]).
@@ -71,6 +72,11 @@ get_uri(Name) ->
   ),
   binary_to_list(UriBin).
 
+server_is_alive(Name) ->
+  case catch ets:lookup_element(ranch_server, {conns_sup, Name}, 2) of
+    Pid when is_pid(Pid) -> true;
+    _ -> false
+  end.
 
 %%====================================================================
 %% Supervisor callbacks

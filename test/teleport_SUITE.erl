@@ -156,6 +156,7 @@ stop_remote_server(HostNode) ->
 
 run_on_slave_start_teleport() ->
   {ok, _Pid} = teleport:start_server(test, []),
+  true = teleport_server_sup:server_is_alive(test),
   Port = teleport_server_sup:get_port(test),
 
   ct:log("[~p][~p] teleport server started on ~p", [node(), ?MODULE, Port]),
