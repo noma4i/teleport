@@ -8,8 +8,7 @@ It's main usage right now is in openkvs and barrel.
 Basic Usage
 -----
 
-1) Start a server
-=====
+#### 1) Start a server
 
 ```erlang
 2> teleport:start_server(test, []).
@@ -21,7 +20,7 @@ Basic Usage
 
 Notice the link created, that can be reused later in the client
 
-2) Connect a node to it
+#### 2) Connect a node to it
 
 ```erlang
 2> teleport:connect(test, "link://enlil-2:60736").
