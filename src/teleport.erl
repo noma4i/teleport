@@ -11,34 +11,23 @@
 
 %% API
 -export([
-  start_system/2,
-  stop_system/1,
-  system_uri/1,
-  connect/1, connect/2,
+  start_server/2,
+  stop_server/1,
+  server_uri/1,
+  connect/2,
   disconnect/1,
-  start_pool/2,
-  stop_pool/1,
-  start_group/2, start_pool/3,
-  stop_group/1,
   incoming_conns/0,
   outgoing_conns/0,
   call/4,
   call/5,
-  call/6,
   cast/4,
-  cast/5,
   blocking_call/4,
   blocking_call/5,
-  blocking_call/6,
   abcast/3,
   sbcast/3,
-  monitor_node/1,
-  demonitor_node/1,
-  monitor_conn/1,
-  demonitor_conn/1,
-  monitor_nodes/1,
-  monitor_conns/1,
-  await_connection/2
+  monitor_link/1,
+  demonitor_link/1,
+  monitor_links/1
 ]).
 
 -export([default_strategy/0]).
@@ -77,63 +66,44 @@
 %% @doc start a system.  A system is a hierarchical group of processes which
 %% share common configuration. It is also the entry point for registering or
 %% looking up proceses.
--spec start_system(atom(), server_config()) -> {ok, pid()} |{error, term()}.
-start_system(Name, Config) ->
-  teleport_system_sup:start_system(Name, Config).
+-spec start_server(atom(), server_config()) -> {ok, pid()} |{error, term()}.
+start_server(Name, Config) ->
+  teleport_server_sup:start_server(Name, Config).
 
 %% @doc stop a system
--spec stop_system(atom()) -> ok.
-stop_system(Name) ->
-  teleport_system_sup:stop_system(Name).
+-spec stop_server(atom()) -> ok.
+stop_server(Name) ->
+  teleport_server_sup:stop_server(Name).
 
 %% @doc get the server uri that can be used to connect from a client
--spec system_uri(atom()) -> uri().
-system_uri(Name) ->
-  teleport_system_sup:get_uri(Name).
-
-%% @doc connect to a server using an uri
--spec connect(Uri::uri()) -> boolean().
-connect(Uri) when is_list(Uri) ->
-  #{ name := Name } = Config = teleport_uri:parse(Uri),
-  teleport_conns_sup:connect(Name, Config).
+-spec server_uri(atom()) -> uri().
+server_uri(Name) ->
+  teleport_server_sup:get_uri(Name).
 
 %% @doc connect to a server using an uri
 -spec connect(Uri::uri(), pool_options()) -> boolean()
         ; (Name::atom(), pool_options()) -> boolean().
-connect(Uri, Options) when is_list(Uri) ->
-  #{ name := Name } = Config = teleport_uri:parse(Uri),
-  teleport_conns_sup:connect(Name, maps:merge(Config, Options));
+connect(Name, Uri) when is_atom(Name), is_list(Uri) ->
+  {ok, Config} = teleport_uri:config_from_uri(Uri),
+  connect(Name, Config);
 connect(Name, Config) when is_atom(Name), is_map(Config) ->
-  teleport_conns_sup:connect(Name, Config).
+  Spec = teleport_link_sup:link_spec(Name, Config),
+  case supervisor:start_child(teleport_link_sup, Spec) of
+    {ok, _Pid} -> true;
+    {error, {already_started, _Pid}} -> false;
+    Error -> Error
+  end.
 
-%% @doc disconnect from a server
+%% @doc disconnect a link
 -spec disconnect(atom()) -> ok.
 disconnect(Name) ->
-  teleport_conns_sup:disconnect(Name).
-
--spec start_pool(atom(), uri()) -> {ok, pid()} | {error, term()}.
-start_pool(Name, Uri) when is_list(Uri) ->
-  Config = teleport_uri:parse(Uri),
-  teleport_conns_sup:start_pool(Name, Config#{name => Name});
-start_pool(Name, Config) when is_atom(Name) ->
-  teleport_conns_sup:start_pool(Name, Config).
-
-start_pool(Name, Uri, Options) ->
-  Config = teleport_uri:parse(Uri),
-  teleport_conns_sup:start_pool(Name, maps:merge(Config, Options)).
-
--spec stop_pool(atom()) -> ok.
-stop_pool(Name) ->
-  teleport_conns_sup:stop_pool(Name).
-
--spec start_group(atom(), [uri() | pool_options()]) ->
-  {ok, pid()} | {error, term()}.
-start_group(Name, Group) ->
-  teleport_conns_sup:start_pool(Name, Group).
-
--spec stop_group(atom()) -> ok.
-stop_group(Name) ->
-  teleport_conns_sup:stop_pool(Name).
+  case supervisor:terminate_child(teleport_link_sup, Name) of
+    ok ->
+      _ = supervisor:delete_child(teleport_link_sup, Name),
+      ok;
+    Error ->
+      Error
+  end.
 
 
 %% @doc on a server node list incoming connections
@@ -146,62 +116,39 @@ outgoing_conns() ->
   lists:usort(
     [Node || {_, _, Node} <- ets:tab2list(teleport_outgoing_conns)]).
 
-%% @doc wait for a connection to be up
-await_connection(Name, Timeout) ->
-  teleport_lb:await_connection(Name, Timeout).
-
-
 %% MONITOR API
 
-%% @doc monitor all nodes
--spec monitor_nodes(boolean()) -> ok.
-monitor_nodes(true) -> teleport_monitor:monitor_node('$all_nodes');
-monitor_nodes(false) -> teleport_monitor:demonitor_node('$all_nodes').
+%% @doc monitor all links
+-spec monitor_links(boolean()) -> ok.
+monitor_links(true) -> teleport_monitor:monitor_link('$all_links');
+monitor_links(false) -> teleport_monitor:monitor_link('$all_links').
 
-%% @doc monitor all connections
--spec monitor_conns(boolean()) -> ok.
-monitor_conns(true) -> teleport_monitor:monitor_conn('$all_conns');
-monitor_conns(false) -> teleport_monitor:demonitor_conn('$all_conns').
+%% @doc monitor a link
+monitor_link(Name) -> teleport_monitor:monitor_link(Name).
 
-%% @doc monitor a node name
-monitor_node(Name) -> teleport_monitor:monitor_node(Name).
-
-demonitor_node(Name) -> teleport_monitor:demonitor_node(Name).
-
-monitor_conn(Name) -> teleport_monitor:monitor_conn(Name).
-
-demonitor_conn(Name) -> teleport_monitor:demonitor_conn(Name).
+demonitor_link(Name) -> teleport_monitor:demonitor_link(Name).
 
 
 %% RPC API
 
-call(Name, M, F, A) -> call(Name, M, F, A, default_strategy(), 5000).
+call(Name, M, F, A) -> call(Name, M, F, A, 5000).
 
-call(Name, M, F, A, Strategy) -> call(Name, M, F, A, Strategy, 5000).
+call(Name, M, F, A, Timeout) ->
+  teleport_link:call(Name, M, F, A, Timeout).
 
-call(Name, M, F, A, Strategy, Timeout) ->
-  teleport_client:call(Name, M, F, A, Strategy, Timeout).
+cast(Name, M, F, A) ->
+  teleport_link:cast(Name, M, F, A).
 
-cast(Name, M, F, A) -> cast(Name, M, F, A, default_strategy()).
+blocking_call(Name, M, F, A) -> blocking_call(Name, M, F, A, 5000).
 
-cast(Name, M, F, A, Strategy) ->
-  teleport_client:cast(Name, M, F, A, Strategy).
-
-blocking_call(Name, M, F, A) -> blocking_call(Name, M, F, A, default_strategy(), 5000).
-
-blocking_call(Name, M, F, A, Strategy) -> blocking_call(Name, M, F, A, Strategy, 5000).
-
-blocking_call(Name, M, F, A, Strategy, Timeout) ->
-  teleport_client:blocking_call(Name, M, F, A, Strategy, Timeout).
+blocking_call(Name, M, F, A, Timeout) ->
+  teleport_link:blocking_call(Name, M, F, A, Timeout).
 
 abcast(Names, ProcName, Msg) ->
-  teleport_client:abcast(Names, ProcName, Msg).
+  teleport_link:abcast(Names, ProcName, Msg).
 
 sbcast(Names, ProcName, Msg) ->
-  teleport_client:sbcast(Names, ProcName, Msg).
-
-
-
+  teleport_link:sbcast(Names, ProcName, Msg).
 
 
 %% internal

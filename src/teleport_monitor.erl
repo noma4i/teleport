@@ -13,20 +13,15 @@
 -define(TAB, ?MODULE).
 
 -export([
-  monitor_conn/1,
-  demonitor_conn/1,
-  monitor_node/1,
-  demonitor_node/1
+  monitor_link/1,
+  demonitor_link/1
 ]).
 
 -export([
-  nodeup/1,
-  nodedown/1,
-  connup/1,
-  conndown/1
+  start_link/0,
+  linkup/1,
+  linkdown/1
 ]).
-
--export([start_link/0]).
 
 -export([
   init/1,
@@ -42,36 +37,17 @@
 
 %% MONITOR API
 
-monitor_node(Name) ->
-  ok = call({monitor_node, self(), Name}),
+monitor_link(Name) ->
+  ok = call({monitor_link, self(), Name}),
   case ets:insert_new(?TAB, {self(), m}) of
     true -> cast({monitor_me, self()});
     false -> ok
   end,
   ok.
 
-demonitor_node(Name) -> call({demonitor_node, self(), Name}).
+demonitor_link(Name) -> call({demonitor_link, self(), Name}).
 
-monitor_conn(Name) ->
-  ok = call({monitor_conn, self(), Name}),
-  case ets:insert_new(?TAB, {self(), m}) of
-    true -> cast({monitor_me, self()});
-    false -> ok
-  end,
-  ok.
-
-demonitor_conn(Name) -> call({demonitor_conn, self(), Name}).
-
-%% Internal API
-
-nodeup(Name) ->call({nodeup, Name}).
-
-nodedown(Name) -> call({nodedown, Name}).
-
-connup(Name) -> call({connup, Name}).
-
-conndown(Name) -> call({conndown, Name}).
-
+%% API
 
 start_link() ->
   IsNew = create_table(),
@@ -92,6 +68,21 @@ create_table() ->
   end.
 
 
+%% internal API
+
+linkup(Name) ->
+  notify({linkup, Name}).
+
+linkdown(Name) ->
+  notify({linkdown, Name}).
+
+%% TODO, maybe retry ?
+notify(Msg) ->
+  case whereis(?MODULE) of
+    undefined -> noproc;
+    Pid -> Pid ! Msg
+  end.
+
 %% gen_server callbacks
 
 init([IsNew]) ->
@@ -102,36 +93,13 @@ init([IsNew]) ->
   {ok, #{}}.
 
 
-handle_call({connup, Name}=Msg, _From, State) ->
-  lager:debug("teleport: CONNUP: ~p~n", [Name]),
-  broadcast(conn, Name, Msg),
-  {reply, ok, State};
-handle_call({conndown, Name}=Msg, _From, State) ->
-  lager:debug("teleport: CONNDOWN: ~p~n", [Name]),
-  broadcast(conn, Name, Msg),
+handle_call({monitor_link, Pid, Name}, _From, State) ->
+  ets:insert(?TAB, {{link, Name, Pid}, Pid}),
   {reply, ok, State};
 
-handle_call({nodeup, Name}=Msg, _From, State) ->
-  broadcast(node, Name, Msg),
+handle_call({demonitor_link, Pid, Name}, _From, State) ->
+  ets:delete(?TAB, {link, Name, Pid}),
   {reply, ok, State};
-handle_call({nodedown, Name}=Msg, _From, State) ->
-  broadcast(node, Name, Msg),
-  {reply, ok, State};
-
-handle_call({monitor_node, Pid, Name}, _From, State) ->
-  ets:insert(?TAB, {{node, Name, Pid}, Pid}),
-  {reply, ok, State};
-handle_call({monitor_conn, Pid, Name}, _From, State) ->
-  ets:insert(?TAB, {{conn, Name, Pid}, Pid}),
-  {reply, ok, State};
-
-handle_call({demonitor_node, Pid, Name}, _From, State) ->
-  ets:delete(?TAB, {node, Name, Pid}),
-  {reply, ok, State};
-handle_call({demonitor_conn, Pid, Name}, _From, State) ->
-  ets:delete(?TAB, {conn, Name, Pid}),
-  {reply, ok, State};
-
 
 handle_call(_Msg, _From, State) ->
   {reply, bad_call, State}.
@@ -143,6 +111,13 @@ handle_cast({monitor_me, Pid}, State) ->
 handle_cast(_Msg, State) ->
   {noreply, State}.
 
+
+handle_info({linkup, _Name}=Msg, State) ->
+  broadcast(Msg),
+  {noreply, State};
+handle_info({linkdown, _Name}=Msg, State) ->
+  broadcast(Msg),
+  {noreply, State};
 handle_info({'DOWN', _MRef, process, Pid, _Info}, State) ->
   process_is_down(Pid),
   {noreply, State};
@@ -156,14 +131,10 @@ code_change(_OldVsn, State, _Extra) ->
   {ok, State}.
 
 
-broadcast(Type, Name, Msg) ->
-  All = case Type of
-          node -> '$all_nodes';
-          conn -> '$all_conns'
-        end,
+broadcast({_LinkState, Name}=Msg) ->
   Pattern = ets:fun2ms(
-    fun({{T, N, _}, Pid})  when
-      (T =:= Type andalso (N =:= Name orelse N =:= All)) ->
+    fun({{link, N, _}, Pid})  when
+      N =:= Name orelse N =:= '$all_links' ->
       Pid
     end),
   Subs = ets:select(?TAB, Pattern),

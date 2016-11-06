@@ -12,7 +12,8 @@
   ssl_conf/2,
   sync_kill/1,
   to_atom/1,
-  to_list/1
+  to_list/1,
+  parse_transport/1
 ]).
 
 -include("teleport.hrl").
@@ -121,3 +122,9 @@ to_list(V) when is_binary(V) -> binary_to_list(V);
 to_list(V) when is_atom(V) -> atom_to_list(V);
 to_list(V) when is_list(V) -> integer_to_list(V);
 to_list(_) -> error(badarg).
+
+
+parse_transport(#{ transport := tcp }) -> ranch_tcp;
+parse_transport(#{ transport := ssl }) -> ranch_ssl;
+parse_transport(#{ transport := _Other}) -> error(transport_not_supported);
+parse_transport(_) -> ranch_tcp.
