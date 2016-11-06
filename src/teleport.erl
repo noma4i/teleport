@@ -13,7 +13,7 @@
 -export([
   start_server/2,
   stop_server/1,
-  system_uri/1,
+  server_uri/1,
   connect/2,
   disconnect/1,
   incoming_conns/0,
@@ -76,15 +76,15 @@ stop_server(Name) ->
   teleport_server_sup:stop_server(Name).
 
 %% @doc get the server uri that can be used to connect from a client
--spec system_uri(atom()) -> uri().
-system_uri(Name) ->
+-spec server_uri(atom()) -> uri().
+server_uri(Name) ->
   teleport_server_sup:get_uri(Name).
 
 %% @doc connect to a server using an uri
 -spec connect(Uri::uri(), pool_options()) -> boolean()
         ; (Name::atom(), pool_options()) -> boolean().
 connect(Name, Uri) when is_atom(Name), is_list(Uri) ->
-  Config = teleport_uri:config_from_uri(Uri),
+  {ok, Config} = teleport_uri:config_from_uri(Uri),
   connect(Name, Config);
 connect(Name, Config) when is_atom(Name), is_map(Config) ->
   Spec = teleport_link_sup:link_spec(Name, Config),
