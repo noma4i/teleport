@@ -33,10 +33,10 @@ start_link() ->
 start_server(Name, Config) when is_map(Config) ->
   case supervisor:start_child(?MODULE, server_spec(Name, Config)) of
     {ok, Pid} ->
-      lager:info("teleport: start server: ~s", [get_uri(Name)]),
+      lager:info("teleport: start server: ~s [~s]", [get_uri(Name), Name]),
       {ok, Pid};
     {error, {already_started, Pid}} ->
-      lager:info("teleport: start server: ~s", [get_uri(Name)]),
+      lager:info("teleport: server already started: ~s [~s]", [get_uri(Name), Name]),
       {ok, Pid}
   end;
 start_server(Name, Config) when is_list(Config) ->
