@@ -33,7 +33,7 @@ init([]) ->
 link_spec(Name, Config) ->
   #{id => Name,
     start => {teleport_link, start_link, [Name, Config]},
-    restart => permanent,
+    restart => transient,
     shutdown => 2000,
     type => worker,
     modules => [teleport_link]}.

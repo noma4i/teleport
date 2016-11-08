@@ -35,6 +35,7 @@ start_link(Ref, Socket, Transport, Opts) ->
 init({Parent, Ref, Socket, Transport, Opts}) ->
   proc_lib:init_ack(Parent, {ok, self()}),
   ok = ranch:accept_ack(Ref),
+  process_flag(trap_exit, true),
   ok = Transport:setopts(Socket, [{active, once}, binary,  {packet, 4}]),
   {ok, Heartbeat} = timer:send_interval(5000, self(), heartbeat),
   {ok, {PeerHost, PeerPort}} = Transport:peername(Socket),
@@ -52,7 +53,8 @@ init({Parent, Ref, Socket, Transport, Opts}) ->
       ok => OK,
       name => Name,
       host => Host,
-      transport_uri => Transport
+      transport_uri => Transport,
+      channels => []
     },
   gen_statem:enter_loop(?MODULE, [], wait_for_handshake,  activate_socket(Data)).
 
@@ -93,7 +95,7 @@ wait_for_handshake(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK})
 wait_for_handshake(EventType, Event, Data) ->
   handle_event(EventType, wait_for_handshake, Event, Data).
 
-wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
+wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK, channels := Channels}) ->
   try erlang:binary_to_term(PayLoad) of
     {call, Headers, Mod, Fun, Args} ->
       _ = spawn(fun() -> worker(Headers, Mod, Fun, Args, Data) end),
@@ -110,6 +112,16 @@ wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
     {sbcast, Headers, ProcName, Msg} ->
       _ = worker(Headers, ProcName, Msg, Data),
       {keep_state, activate_socket(Data)};
+    {new_channel, ChannelId} ->
+      Pid = spawn_link(fun() -> channel(ChannelId, Data) end),
+      Data2 = Data#{ channels := [{ChannelId, Pid} | Channels] },
+      {keep_state, activate_socket(Data2)};
+    {channel_msg, ChannelId, Msg} ->
+      handle_channel_msg(ChannelId, Msg, Data),
+      {keep_state, activate_socket(Data)};
+    {close_channel, ChannelId} ->
+      Data2 = handle_channel_closed(ChannelId, Data),
+      {keep_state, activate_socket(Data2)};
     heartbeat ->
       {keep_state, activate_socket(Data#{missed_heartbeats => 0})};
     OtherMsg ->
@@ -140,6 +152,14 @@ handle_event(info, _State, heartbeat, Data) ->
       {stop, normal, Data};
     true ->
       {keep_state, activate_socket(Data#{missed_heartbeats => M2})}
+  end;
+handle_event(info, _State, {'EXIT', Pid, _Reason}, Data = #{ channels := Channels }) ->
+  case lists:keyfind(Pid, 2, Channels) of
+    {ChannelId, Pid} ->
+      Data2 = Data#{ channels => delete_channel(ChannelId, Channels) },
+      {keep_state, activate_socket(Data2)};
+    false ->
+      {keep_state, activate_socket(Data)}
   end;
 handle_event(EventType, State, Event, Data) ->
   #{ transport := Transport, sock := Sock } = Data,
@@ -178,6 +198,53 @@ worker(Headers, Mod, Fun, Args, Data) ->
   Packet = erlang:term_to_binary({call_result, Headers, Result}),
   ok = send(Data, Packet).
 
+
+channel(ChannelId, Data) ->
+  receive
+    {channel_msg, ChannelId, {To, '$channel_register'}} ->
+      To ! {'$channel_register', ChannelId, self()},
+      channel(ChannelId, Data);
+    {channel_msg, ChannelId, {To, '$channel_unregister'}} ->
+      To ! {'$channel_unregister', ChannelId, self()},
+      channel(ChannelId, Data);
+    {channel_msg, ChannelId, {To, {'$channel_req', Msg}}} ->
+      To ! {'$channel_req', ChannelId, self(), Msg},
+      channel(ChannelId, Data);
+    {channel_msg, ChannelId, {To, Msg}} ->
+      To ! Msg,
+      channel(ChannelId, Data);
+    {channel_closed, ChannelId} ->
+      exit(normal);
+    Msg ->
+      Packet = erlang:term_to_binary({channel_msg, ChannelId, Msg}),
+      ok = send(Data, Packet),
+      channel(ChannelId, Data)
+  end.
+
+
+get_channel_by_id(ChannelId, #{ channels := Channels }) ->
+  lists:keyfind(ChannelId, 1, Channels).
+
+delete_channel(ChannelId, Data = #{ channels := Channels }) ->
+  Channels2 = lists:keydelete(ChannelId, 1, Channels),
+  Data#{ channels => Channels2}.
+
+handle_channel_msg(ChannelId, Msg, Data) ->
+  case get_channel_by_id(ChannelId, Data) of
+    {ChannelId, Pid} ->
+      Pid ! {channel_msg, ChannelId, Msg};
+    false ->
+      ok
+  end.
+
+handle_channel_closed(ChannelId, Data) ->
+  case get_channel_by_id(ChannelId, Data) of
+    {ChannelId, Pid} ->
+      Pid ! {channel_closed, ChannelId},
+      delete_channel(ChannelId, Data);
+    false ->
+      ok
+  end.
 
 activate_socket(Data = #{ transport := Transport, sock := Sock}) ->
   ok = Transport:setopts(Sock, [{active, once}, {packet, 4}]),

@@ -15,7 +15,11 @@
   blocking_call/5,
   cast/4,
   abcast/3,
-  sbcast/3
+  sbcast/3,
+  new_channel/1,
+  close_channel/1,
+  send_channel/3,
+  recv_channel/2
 ]).
 
 -export([
@@ -42,6 +46,13 @@
 -include("teleport.hrl").
 
 -define(TIMEOUT, 5000).
+
+-record(channel, {
+  id,
+  ref,
+  pid,
+  mref
+}).
 
 call(Name, Mod, Fun, Args, Timeout) ->
   case do_call(Name, call, Mod, Fun, Args) of
@@ -118,6 +129,31 @@ wait_for_sbcast([Pid | Rest], Good, Bad) ->
 wait_for_sbcast([], Good, Bad) ->
   {Good, Bad}.
 
+new_channel(Name) ->
+  Ref = make_ref(),
+  {ok, ChannelId} = gen_statem:call(Name, {new_channel, Ref}),
+  #{ link => Name, id => ChannelId, ref => Ref}.
+
+close_channel(#{ link := Link,  ref := Ref}) ->
+  gen_statem:call(Link, {close_channel, Ref}).
+
+send_channel(#{ link := Link, id := Id}, To, Msg) ->
+  case get_connection(Link) of
+    {ok, {_Pid, {Transport, Sock}}} ->
+      Packet = term_to_binary({channel_msg, Id, {To, Msg}}),
+      Transport:send(Sock, Packet);
+    Error ->
+      Error
+  end.
+
+recv_channel(#{ link := Link, ref := Ref }, Timeout) ->
+  MRef = erlang:monitor(process, whereis(Link)),
+  receive
+    {channel_msg, Ref, Msg} -> Msg;
+    {channel_closed, Ref} -> channel_closed;
+    {'DOWN', MRef, _, _, _} -> channel_closed
+  after Timeout -> erlang:error(channel_timeout)
+  end.
 
 do_call(Name, CallType, Mod, Fun, Args) ->
   case get_connection(Name) of
@@ -194,7 +230,9 @@ init([Name, Config]) ->
       conf => Config,
       peer_node => undefined,
       retry => {Retries, 200, ?TIMEOUT},
-      ok => OK
+      ok => OK,
+      channelid => 0,
+      channels => []
     },
   {ok, connect, Data}.
 
@@ -242,6 +280,10 @@ connect(info, connect, Data) ->
   end;
 connect({call, _From}, get_connection, Data) ->
   {keep_state, Data, postpone};
+connect({call, _From}, {new_channel, _}, Data) ->
+  {keep_state, Data, postpone};
+connect({call, _From}, {close_channel, _}, Data) ->
+  {keep_state, Data, postpone};
 connect(EventType, EventContent, Data) ->
   handle_event(EventType, connect, EventContent,Data).
 
@@ -273,6 +315,10 @@ wait_handshake(info, {OK, Sock, Payload}, Data = #{ sock := Sock, ok := OK}) ->
   end;
 wait_handshake({call, _From}, get_connection, Data) ->
   {keep_state, Data, postpone};
+wait_handshake({call, _From}, {new_channel, _}, Data) ->
+  {keep_state, Data, postpone};
+wait_handshake({call, _From}, {close_channel, _}, Data) ->
+  {keep_state, Data, postpone};
 wait_handshake(EventType, EventContent, Data) ->
   handle_event(EventType, wait_handshake, EventContent,Data).
 
@@ -280,6 +326,31 @@ wait_handshake(EventType, EventContent, Data) ->
 wait_for_data({call, From}, get_connection, Data = #{ transport := Transport, sock := Sock}) ->
   Reply = {ok, {self(), {Transport, Sock}}},
   {keep_state, Data, [{reply, From, Reply}]};
+wait_for_data(
+  {call, From={Pid, _Tag}}, {new_channel, ChannelRef},
+  Data=#{  transport := Transport, sock := Sock, channelid := ChannelId, channels := Channels }
+) ->
+  Packet = term_to_binary({new_channel, ChannelId}),
+  ok = Transport:send(Sock, Packet),
+  MRef = erlang:monitor(process, Pid),
+  Channel = #channel{id=ChannelId, ref=ChannelRef, pid=Pid, mref=MRef},
+  {keep_state, Data#{ channelid => ChannelId+2, channels => [Channel|Channels] },
+    [{reply, From, {ok, ChannelId} }]};
+
+wait_for_data(
+  {call, From}, {close_channel, ChannelRef},
+  Data=#{  transport := Transport, sock := Sock }
+) ->
+  Data2 = case get_channel_by_ref(ChannelRef, Data) of
+            false -> Data;
+            Channel ->
+              Packet = term_to_binary({close_channel, Channel#channel.id}),
+              Transport:send(Sock, Packet),
+              erlang:demonitor(Channel#channel.mref, [flush]),
+              delete_channel(Channel#channel.id, Data)
+          end,
+{keep_state, Data2, [{reply, From, ok}]};
+
 wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
   try erlang:binary_to_term(PayLoad) of
     {call_result, Headers, Result} ->
@@ -292,6 +363,16 @@ wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
     {sbcast_failed, Headers = #{ pid := Pid}} ->
       _ = (catch Pid ! {sbcast_failed, Headers}),
       {keep_state, activate_socket(Data)};
+    {channel_msg, ChannelId, Msg} ->
+      %% TODO: we unknown channels, maybe we shouldn't
+      case get_channel_by_id(ChannelId, Data) of
+        false -> ok;
+        #channel{pid=Pid, ref=Ref} -> Pid ! {channel_msg, Ref, Msg}
+      end,
+      {keep_state, activate_socket(Data)};
+    {close_channel, ChannelId} ->
+      Data2 = handle_channel_closed(ChannelId, Data),
+      {keep_state, activate_socket(Data2)};
     heartbeat ->
       {keep_state, activate_socket(Data#{missed_heartbeats => 0})};
     _Else ->
@@ -306,6 +387,18 @@ wait_for_data(info, {OK, Sock, PayLoad}, Data = #{ sock := Sock, ok := OK}) ->
     _ = cleanup(Data),
     {stop, normal, Data}
   end;
+
+wait_for_data(
+  info, {'DOWN', _Ref, process, Pid, _Info},
+  Data = #{ transport := Transport, sock := Sock}
+) ->
+  Channel = get_channel_by_pid(Pid, Data),
+  Packet = term_to_binary({close_channel, Channel#channel.id}),
+  Transport:send(Sock, Packet),
+  erlang:demonitor(Channel#channel.mref, [flush]),
+  Data2 = delete_channel(Channel#channel.id, Data),
+  {keep_state, Data2};
+
 wait_for_data(EventType, EventContent, Data) ->
   handle_event(EventType, wait_for_data, EventContent ,Data).
 
@@ -347,6 +440,11 @@ handle_conn_closed(Error, State, Data = #{name := Name, peer_node := PeerNode}) 
   ),
   {stop, normal, cleanup(Data)}.
 
+handle_channel_closed(ChannelId, Data) ->
+  Channel = get_channel_by_id(ChannelId, Data),
+  Channel#channel.pid ! {channel_closed, Channel#channel.ref},
+  erlang:demonitor(Channel#channel.mref, [flush]),
+  delete_channel(Channel#channel.id, Data).
 
 send_handshake(State = #{ name := Name}) ->
   Cookie = erlang:get_cookie(),
@@ -395,3 +493,16 @@ rand_increment(N, Max) ->
 activate_socket(Data = #{ transport := Transport, sock := Sock}) ->
   ok = Transport:setopts(Sock, [{active, once}, {packet, 4}]),
   Data.
+
+get_channel_by_id(ChannelId, #{ channels := Channels }) ->
+  lists:keyfind(ChannelId, #channel.id, Channels).
+
+get_channel_by_ref(ChannelRef, #{ channels := Channels }) ->
+  lists:keyfind(ChannelRef, #channel.ref, Channels).
+
+get_channel_by_pid(Pid, #{ channels := Channels }) ->
+  lists:keyfind(Pid, #channel.pid, Channels).
+
+delete_channel(ChannelId, Data = #{ channels := Channels }) ->
+  Channels2 = lists:keydelete(ChannelId, #channel.id, Channels),
+  Data#{ channels => Channels2}.

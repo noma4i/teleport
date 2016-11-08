@@ -27,7 +27,16 @@
   sbcast/3,
   monitor_link/1,
   demonitor_link/1,
-  monitor_links/1
+  monitor_links/1,
+  new_channel/1,
+  close_channel/1,
+  send_channel/3,
+  send_channel_sync/3,
+  send_channel_sync/4,
+  recv_channel/1,
+  recv_channel/2,
+  register_channel/2,
+  unregister_channel/2
 ]).
 
 -include("teleport.hrl").
@@ -147,3 +156,33 @@ abcast(Names, ProcName, Msg) ->
 
 sbcast(Names, ProcName, Msg) ->
   teleport_link:sbcast(Names, ProcName, Msg).
+
+
+%% Channel
+
+new_channel(LinkId) ->
+  teleport_link:new_channel(LinkId).
+
+close_channel(Channel) ->
+  teleport_link:close_channel(Channel).
+
+send_channel(Channel, To, Msg) ->
+  teleport_link:send_channel(Channel, To, Msg).
+
+send_channel_sync(Channel, To, Msg) ->
+  send_channel_sync(Channel, To, Msg, 5000).
+
+send_channel_sync(Channel, To, Msg, Timeout) ->
+  ok = teleport_link:send_channel(Channel, To, {'$channel_req', Msg}),
+  recv_channel(Channel, Timeout).
+
+recv_channel(Channel) -> recv_channel(Channel, 5000).
+
+recv_channel(Channel, Timeout) ->
+  teleport_link:recv_channel(Channel, Timeout).
+
+register_channel(Channel, To) ->
+  teleport_link:send_channel(Channel, To, '$channel_register').
+
+unregister_channel(Channel, To) ->
+  teleport_link:send_channel(Channel, To, '$channel_unregister').
