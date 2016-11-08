@@ -61,8 +61,6 @@ init([]) ->
     modules => [teleport_link_sup]
   },
   
-  
-
   {ok, { {one_for_one, 5, 10}, [Monitor, ServerSup, LinkSup]} }.
 
 %%====================================================================

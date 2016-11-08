@@ -91,7 +91,7 @@ On the client:
 {got,hello}
 
 ```
-6) register/deregister a channel on the server
+5) register/deregister a channel on the server
 
 Using the function `teleport:register_channel/2` and `teleport:unregister_channel/2` 
 you have the possibility to register a channel on the server, and let the process 
