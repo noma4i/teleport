@@ -27,14 +27,16 @@
   basic/1,
   monitor_link/1,
   monitor_links/1,
-  monitor_links2/1
+  monitor_links2/1,
+  channel/1
 ]).
 
 all() -> [
   basic,
   monitor_link,
   monitor_links,
-  monitor_links2
+  monitor_links2,
+  channel
 ].
 
 init_per_suite(Config) ->
@@ -134,13 +136,32 @@ monitor_links2([{port, Port}|_]) ->
   teleport:monitor_links(false),
   ok.
 
+channel([{port, Port}|_]) ->
+  true = teleport:connect(test, #{port => Port}),
+  Channel = teleport:new_channel(test),
+  Channel2 = teleport:new_channel(test),
+  {welcome, me} = teleport:send_channel_sync(Channel, simple_channel, {hello, me}),
+  {welcome, me2} = teleport:send_channel_sync(Channel2, simple_channel, {hello, me2}),
+  ok = teleport:register_channel(Channel, simple_channel),
+  ok = teleport:register_channel(Channel2, simple_channel),
+  ok = teleport:unregister_channel(Channel, simple_channel),
+  ok = teleport:unregister_channel(Channel2, simple_channel),
+  RegEvents = collect_events([], 4),
+  true = (
+    length(RegEvents) =:= 4
+  ),
+  ok = teleport:close_channel(Channel),
+  ok = teleport:close_channel(Channel2),
+  teleport:disconnect(test),
+  ok.
+
+
 collect_events(Acc, 0) -> lists:reverse(Acc);
 collect_events(Acc, N) ->
   receive
     Msg -> collect_events([Msg | Acc], N - 1)
   after 5000 -> error(timeout)
   end.
-
 
 %% =============================================================================
 %% Helpers for creation of remote connections
@@ -158,6 +179,9 @@ run_on_slave_start_teleport() ->
   {ok, _Pid} = teleport:start_server(test, []),
   true = teleport_server_sup:server_is_alive(test),
   Port = teleport_server_sup:get_port(test),
+
+  %% start a simple channel
+  test_module:start_simple_channel(),
 
   ct:log("[~p][~p] teleport server started on ~p", [node(), ?MODULE, Port]),
   {ok_from_slave, Port}.
