@@ -1,4 +1,8 @@
-openkvs version 0.4.1 beta, released on 2016/11/02
+teleport version 0.6.1 beta, released on 2016/11/11
 =====================================================
 
 - initial public release
+- support sub-channels
+- cast/call/blocking_call/abcast/sbcast support
+- support multiple teleport server
+- handle cookie erlang handshake

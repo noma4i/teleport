@@ -1,5 +1,5 @@
 @copyright 2016 Benoît Chesneau.
-@version 0.6.0
+@version 0.6.1
 @title teleport - Erlang application to create link between erlang nodes.
 
 @doc
