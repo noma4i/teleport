@@ -94,22 +94,20 @@ connect(Name, Uri) when is_atom(Name), is_list(Uri) ->
   {ok, Config} = teleport_uri:config_from_uri(Uri),
   connect(Name, Config);
 connect(Name, Config) when is_atom(Name), is_map(Config) ->
-  Spec = teleport_link_sup:link_spec(Name, Config),
-  case supervisor:start_child(teleport_link_sup, Spec) of
+  case supervisor:start_child(teleport_link_sup, [Name, Config]) of
     {ok, _Pid} -> true;
     {error, {already_started, _Pid}} -> false;
     Error -> Error
   end.
 
 %% @doc disconnect a link
--spec disconnect(atom()) -> ok.
+-spec disconnect(atom() | pid()) -> ok.
+disconnect(Pid) when is_pid(Pid) ->
+  teleport_link_sup:stop_child(Pid);
 disconnect(Name) ->
-  case supervisor:terminate_child(teleport_link_sup, Name) of
-    ok ->
-      _ = supervisor:delete_child(teleport_link_sup, Name),
-      ok;
-    Error ->
-      Error
+  case whereis(Name) of
+    undefined -> ok;
+    Pid -> teleport_link_sup:stop_child(Pid)
   end.
 
 

@@ -13,27 +13,44 @@
 %% API
 -export([
   start_link/0,
-  link_spec/2
+  start_child/2,
+  stop_child/1
 ]).
 
 %% supervisor callback
 -export([init/1]).
 
 start_link() ->
-  supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+  {ok, Pid} = supervisor:start_link({local, ?MODULE}, ?MODULE, []),
+  %% start preconfigured links
+  Links = application:get_env(teleport, links, []),
+  [start_child(Pid, [Name, Config]) || {Name, Config} <- Links],
+  {ok, Pid}.
+
+start_child(LinkSup, Args) when is_list(Args) -> supervisor:start_child(LinkSup, Args);
+start_child(_, _) -> erlang:error(badarg).
+
+
+stop_child(Pid) ->
+  supervisor:terminate_child(?MODULE, Pid).
 
 init([]) ->
-  Links = application:get_env(teleport, links, []),
-  Specs = lists:map(
-    fun({Name, Config}) ->
-      link_spec(Name, Config)
-    end, Links),
-  {ok, {{one_for_one, 1, 5}, Specs}}.
+  {ok, { simple_one_for_one_sup_options(5, 1), [link_spec()] } }.
 
-link_spec(Name, Config) ->
-  #{id => Name,
-    start => {teleport_link, start_link, [Name, Config]},
+
+simple_one_for_one_sup_options(Intensity, Period) ->
+  #{
+    strategy => simple_one_for_one,
+    intensity => Intensity, % Num failures allowed,
+    period => Period % Within this many seconds
+  }.
+
+link_spec() ->
+  #{
+    id => teleport_link,
+    start => {teleport_link, start_link, []},
     restart => transient,
     shutdown => 2000,
     type => worker,
-    modules => [teleport_link]}.
+    modules => [teleport_link]
+  }.
