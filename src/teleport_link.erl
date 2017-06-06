@@ -23,7 +23,7 @@
 ]).
 
 -export([
-  start_link/2,
+  start_link/1, start_link/2,
   get_connection/1
 ]).
 
@@ -206,10 +206,16 @@ robust_call(Mgr, Req, Retries) ->
     robust_call(Mgr, Req, Retries - 1)
   end.
 
+start_link(Config) ->
+  gen_statem:start_link(?MODULE, [Config], []).
+
 start_link(Name, Config) ->
   gen_statem:start_link({local, Name}, ?MODULE,[Name, Config], []).
 
-init([Name, Config]) ->
+init([Config]) -> init_1(self(), Config);
+init([Name, Config]) -> init_1(Name, Config).
+
+init_1(Name, Config) ->
   process_flag(trap_exit, true),
   self() ! connect,
   %% initialize the data
@@ -421,6 +427,8 @@ handle_event(info, _State, heartbeat, Data) ->
 handle_event(EventType, State, Event, Data = #{ transport := Transport, sock := Sock }) ->
   {_OK, Closed, Error} = Transport:messages(),
   case Event of
+    {'EXIT', _} ->
+      handle_conn_closed(Closed, State, Data);
     {Closed, Sock} ->
       handle_conn_closed(Closed, State, Data);
     {Error, Sock, Reason} ->

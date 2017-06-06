@@ -25,6 +25,7 @@
 
 -export([
   basic/1,
+  start_link/1,
   monitor_link/1,
   monitor_links/1,
   monitor_links2/1,
@@ -33,6 +34,7 @@
 
 all() -> [
   basic,
+  start_link,
   monitor_link,
   monitor_links,
   monitor_links2,
@@ -67,6 +69,14 @@ basic([{port, Port}|_]) ->
   true = (whereis(test) =/= undefined),
   teleport:disconnect(test),
   true = (whereis(test) =:= undefined),
+  ok.
+
+start_link([{port, Port}|_]) ->
+  {ok, Pid} = teleport_link:start_link(#{port => Port}),
+  3 = teleport:call(Pid, test_module, add, [1,2]),
+  true = erlang:is_process_alive(Pid),
+  _ = shutdown(Pid),
+  false = erlang:is_process_alive(Pid),
   ok.
 
 monitor_link([{port, Port}|_]) ->
@@ -215,3 +225,31 @@ filter_rebar_path(CodePath) ->
                     _ -> false
                   end
                end, CodePath).
+
+
+monitor_child(Pid) ->
+  erlang:monitor(process, Pid),
+  unlink(Pid),
+  receive
+    {'EXIT', Pid, Reason} ->
+      receive
+        {'DOWN', _, process, Pid, _} ->
+          {error, Reason}
+      end
+  after 0 ->
+    ok
+  end.
+
+shutdown(Pid) ->
+  case monitor_child(Pid) of
+    ok ->
+      exit(Pid, kill),
+      receive
+        {'DOWN', _MRef, process, Pid, killed} ->
+          ok;
+        {'DOWN', _MRef, process, Pid, OtherReason} ->
+          {error, OtherReason}
+      end;
+    {error, Reason} ->
+      {error, Reason}
+  end.
